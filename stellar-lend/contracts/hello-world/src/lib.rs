@@ -1158,6 +1158,13 @@ impl HelloContract {
         interest_rate::get_current_utilization(&env).unwrap_or(0)
     }
 
+    /// Current interest rate model implementation.
+    pub fn get_interest_rate_model(env: Env) -> interest_rate::InterestRateModelKind {
+        interest_rate::get_interest_rate_config(&env)
+            .map(|cfg| cfg.model)
+            .unwrap_or(interest_rate::InterestRateModelKind::Kink)
+    }
+
     /// Admin-only: update interest rate model parameters.
     #[allow(clippy::too_many_arguments)]
     pub fn update_interest_rate_config(
@@ -1183,6 +1190,15 @@ impl HelloContract {
             spread_bps,
         )
         .map_err(Into::into)
+    }
+
+    /// Admin-only: switch between linear, kink, jump, and exponential rate models.
+    pub fn switch_interest_rate_model(
+        env: Env,
+        caller: Address,
+        model: interest_rate::InterestRateModelKind,
+    ) -> Result<(), LendingError> {
+        interest_rate::switch_interest_rate_model(&env, caller, model).map_err(Into::into)
     }
 
     /// Current global borrow index (scaled by 1e12; starts at 1e12 = "1.0").

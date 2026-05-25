@@ -5,7 +5,9 @@ mod borrow;
 mod deposit;
 mod events;
 mod flash_loan;
+mod interest_rate;
 mod pause;
+mod risk_monitor;
 mod token_receiver;
 mod withdraw;
 
@@ -25,7 +27,11 @@ use flash_loan::{
     flash_loan as flash_loan_logic, set_flash_loan_fee_bps as set_flash_loan_fee_logic,
     FlashLoanError,
 };
-use pause::{is_paused, set_pause as set_pause_logic, PauseType};
+pub use interest_rate::{
+    InterestRateConfig, InterestRateConfigUpdate, InterestRateError, InterestRateModelKind,
+};
+pub use pause::PauseType;
+use pause::{is_paused, set_pause as set_pause_logic};
 use token_receiver::receive as receive_logic;
 
 mod views;
@@ -48,10 +54,9 @@ use insurance::{
     collect_premium as insurance_collect_premium, evaluate_claim as insurance_evaluate_claim,
     fund_pool as insurance_fund_pool, get_analytics as insurance_get_analytics,
     get_claim_by_id as insurance_get_claim, get_coverage_limit as insurance_get_coverage_limit,
-    get_premium_rate as insurance_get_premium_rate,
-    initialize as insurance_initialize,
-    set_coverage_limit as insurance_set_coverage_limit,
-    submit_claim as insurance_submit_claim, InsuranceAnalytics, InsuranceClaim, InsuranceError,
+    get_premium_rate as insurance_get_premium_rate, initialize as insurance_initialize,
+    set_coverage_limit as insurance_set_coverage_limit, submit_claim as insurance_submit_claim,
+    InsuranceAnalytics, InsuranceClaim, InsuranceError,
 };
 
 #[cfg(test)]
@@ -64,6 +69,8 @@ mod deposit_test;
 mod flash_loan_test;
 #[cfg(test)]
 mod insurance_test;
+#[cfg(test)]
+mod interest_rate_test;
 #[cfg(test)]
 mod math_safety_test;
 #[cfg(test)]
@@ -272,6 +279,40 @@ impl LendingContract {
     /// Get protocol admin
     pub fn get_admin(env: Env) -> Option<Address> {
         get_borrow_admin(&env)
+    }
+
+    /// Get the active interest rate model configuration.
+    pub fn get_interest_rate_config(env: Env) -> InterestRateConfig {
+        interest_rate::get_config(&env)
+    }
+
+    /// Get the active interest rate model kind.
+    pub fn get_interest_rate_model(env: Env) -> InterestRateModelKind {
+        interest_rate::get_config(&env).model
+    }
+
+    /// Get protocol utilization in basis points.
+    pub fn get_utilization_bps(env: Env) -> Result<i128, InterestRateError> {
+        interest_rate::utilization_bps(&env)
+    }
+
+    /// Get the current borrow rate in basis points.
+    pub fn get_borrow_rate_bps(env: Env) -> Result<i128, InterestRateError> {
+        interest_rate::borrow_rate_bps(&env)
+    }
+
+    /// Get the current supply rate in basis points.
+    pub fn get_supply_rate_bps(env: Env) -> Result<i128, InterestRateError> {
+        interest_rate::supply_rate_bps(&env)
+    }
+
+    /// Admin-only: update interest rate model type or parameters.
+    pub fn update_interest_rate_model(
+        env: Env,
+        admin: Address,
+        update: InterestRateConfigUpdate,
+    ) -> Result<(), InterestRateError> {
+        interest_rate::update_config(&env, &admin, update).map(|_| ())
     }
 
     /// Execute a flash loan

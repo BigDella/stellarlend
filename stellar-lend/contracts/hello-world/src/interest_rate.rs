@@ -45,6 +45,16 @@ pub enum InterestRateError {
     AlreadyInitialized = 6,
 }
 
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum InterestRateModelKind {
+    Linear = 0,
+    Kink = 1,
+    Jump = 2,
+    Exponential = 3,
+}
+
 /// Storage keys for interest rate data
 #[contracttype]
 #[derive(Clone)]
@@ -84,6 +94,8 @@ pub struct LendingIndex {
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct InterestRateConfig {
+    /// Active interest rate model implementation
+    pub model: InterestRateModelKind,
     /// Base interest rate (in basis points, e.g., 100 = 1% per year)
     /// This is the minimum rate when utilization is 0%
     pub base_rate_bps: i128,
@@ -117,6 +129,7 @@ const SECONDS_PER_YEAR: u64 = 365 * 86400; // 31,536,000 seconds
 /// Default interest rate configuration
 fn get_default_config() -> InterestRateConfig {
     InterestRateConfig {
+        model: InterestRateModelKind::Kink,
         base_rate_bps: 100,          // 1% base rate
         kink_utilization_bps: 8000,  // 80% kink
         multiplier_bps: 2000,        // 20% multiplier below kink
@@ -126,6 +139,118 @@ fn get_default_config() -> InterestRateConfig {
         spread_bps: 200,             // 2% spread
         emergency_adjustment_bps: 0, // No emergency adjustment
         last_update: 0,
+    }
+}
+
+fn checked_mul_div(lhs: i128, rhs: i128, divisor: i128) -> Result<i128, InterestRateError> {
+    if divisor == 0 {
+        return Err(InterestRateError::DivisionByZero);
+    }
+    lhs.checked_mul(rhs)
+        .ok_or(InterestRateError::Overflow)?
+        .checked_div(divisor)
+        .ok_or(InterestRateError::DivisionByZero)
+}
+
+fn linear_rate(utilization: i128, config: &InterestRateConfig) -> Result<i128, InterestRateError> {
+    let increase = checked_mul_div(utilization, config.multiplier_bps, BASIS_POINTS_SCALE)?;
+    config
+        .base_rate_bps
+        .checked_add(increase)
+        .ok_or(InterestRateError::Overflow)
+}
+
+fn kink_rate(utilization: i128, config: &InterestRateConfig) -> Result<i128, InterestRateError> {
+    if utilization <= config.kink_utilization_bps {
+        if config.kink_utilization_bps == 0 {
+            return Ok(config.base_rate_bps);
+        }
+        let increase = checked_mul_div(
+            utilization,
+            config.multiplier_bps,
+            config.kink_utilization_bps,
+        )?;
+        return config
+            .base_rate_bps
+            .checked_add(increase)
+            .ok_or(InterestRateError::Overflow);
+    }
+
+    let rate_at_kink = config
+        .base_rate_bps
+        .checked_add(config.multiplier_bps)
+        .ok_or(InterestRateError::Overflow)?;
+    let utilization_above_kink = utilization
+        .checked_sub(config.kink_utilization_bps)
+        .ok_or(InterestRateError::Overflow)?;
+    let max_utilization_above_kink = BASIS_POINTS_SCALE
+        .checked_sub(config.kink_utilization_bps)
+        .ok_or(InterestRateError::Overflow)?;
+    let additional_rate = checked_mul_div(
+        utilization_above_kink,
+        config.jump_multiplier_bps,
+        max_utilization_above_kink,
+    )?;
+
+    rate_at_kink
+        .checked_add(additional_rate)
+        .ok_or(InterestRateError::Overflow)
+}
+
+fn jump_rate(utilization: i128, config: &InterestRateConfig) -> Result<i128, InterestRateError> {
+    let mut rate = linear_rate(utilization, config)?;
+    if utilization > config.kink_utilization_bps {
+        let utilization_above_kink = utilization
+            .checked_sub(config.kink_utilization_bps)
+            .ok_or(InterestRateError::Overflow)?;
+        let max_utilization_above_kink = BASIS_POINTS_SCALE
+            .checked_sub(config.kink_utilization_bps)
+            .ok_or(InterestRateError::Overflow)?;
+        let jump = checked_mul_div(
+            utilization_above_kink,
+            config.jump_multiplier_bps,
+            max_utilization_above_kink,
+        )?;
+        rate = rate.checked_add(jump).ok_or(InterestRateError::Overflow)?;
+    }
+    Ok(rate)
+}
+
+fn exponential_rate(
+    utilization: i128,
+    config: &InterestRateConfig,
+) -> Result<i128, InterestRateError> {
+    let utilization_squared = checked_mul_div(utilization, utilization, BASIS_POINTS_SCALE)?;
+    let utilization_cubed = checked_mul_div(utilization_squared, utilization, BASIS_POINTS_SCALE)?;
+    let quadratic = checked_mul_div(
+        utilization_squared,
+        config.multiplier_bps,
+        BASIS_POINTS_SCALE,
+    )?;
+    let cubic = checked_mul_div(
+        utilization_cubed,
+        config.jump_multiplier_bps,
+        BASIS_POINTS_SCALE,
+    )?;
+
+    config
+        .base_rate_bps
+        .checked_add(quadratic)
+        .ok_or(InterestRateError::Overflow)?
+        .checked_add(cubic)
+        .ok_or(InterestRateError::Overflow)
+}
+
+pub fn calculate_model_borrow_rate(
+    model: InterestRateModelKind,
+    utilization: i128,
+    config: &InterestRateConfig,
+) -> Result<i128, InterestRateError> {
+    match model {
+        InterestRateModelKind::Linear => linear_rate(utilization, config),
+        InterestRateModelKind::Kink => kink_rate(utilization, config),
+        InterestRateModelKind::Jump => jump_rate(utilization, config),
+        InterestRateModelKind::Exponential => exponential_rate(utilization, config),
     }
 }
 
@@ -196,49 +321,7 @@ pub fn calculate_borrow_rate(env: &Env) -> Result<i128, InterestRateError> {
     let config = get_interest_rate_config(env).ok_or(InterestRateError::InvalidParameter)?;
     let utilization = calculate_utilization(env)?;
 
-    let mut rate = config.base_rate_bps;
-
-    if utilization <= config.kink_utilization_bps {
-        // Below kink: linear increase
-        if config.kink_utilization_bps > 0 {
-            let rate_increase = utilization
-                .checked_mul(config.multiplier_bps)
-                .ok_or(InterestRateError::Overflow)?
-                .checked_div(config.kink_utilization_bps)
-                .ok_or(InterestRateError::DivisionByZero)?;
-            rate = rate
-                .checked_add(rate_increase)
-                .ok_or(InterestRateError::Overflow)?;
-        }
-    } else {
-        // Above kink: steeper increase
-        let rate_at_kink = config
-            .base_rate_bps
-            .checked_add(config.multiplier_bps)
-            .ok_or(InterestRateError::Overflow)?;
-
-        let utilization_above_kink = utilization
-            .checked_sub(config.kink_utilization_bps)
-            .ok_or(InterestRateError::Overflow)?;
-
-        let max_utilization_above_kink = BASIS_POINTS_SCALE
-            .checked_sub(config.kink_utilization_bps)
-            .ok_or(InterestRateError::Overflow)?;
-
-        if max_utilization_above_kink > 0 {
-            let additional_rate = utilization_above_kink
-                .checked_mul(config.jump_multiplier_bps)
-                .ok_or(InterestRateError::Overflow)?
-                .checked_div(max_utilization_above_kink)
-                .ok_or(InterestRateError::DivisionByZero)?;
-
-            rate = rate_at_kink
-                .checked_add(additional_rate)
-                .ok_or(InterestRateError::Overflow)?;
-        } else {
-            rate = rate_at_kink;
-        }
-    }
+    let mut rate = calculate_model_borrow_rate(config.model, utilization, &config)?;
 
     // Apply emergency adjustment
     rate = rate
@@ -406,6 +489,22 @@ pub fn update_interest_rate_config(
     Ok(())
 }
 
+pub fn switch_interest_rate_model(
+    env: &Env,
+    caller: Address,
+    model: InterestRateModelKind,
+) -> Result<(), InterestRateError> {
+    crate::admin::require_admin(env, &caller).map_err(|_| InterestRateError::Unauthorized)?;
+
+    let config_key = InterestRateDataKey::InterestRateConfig;
+    let mut config = get_interest_rate_config(env).ok_or(InterestRateError::InvalidParameter)?;
+    config.model = model;
+    config.last_update = env.ledger().timestamp();
+    env.storage().persistent().set(&config_key, &config);
+
+    Ok(())
+}
+
 /// Set emergency rate adjustment
 ///
 /// # Arguments
@@ -557,4 +656,65 @@ pub fn compute_index_interest(
         .checked_div(user_index)
         .ok_or(InterestRateError::DivisionByZero)?;
     Ok(interest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(model: InterestRateModelKind) -> InterestRateConfig {
+        InterestRateConfig {
+            model,
+            base_rate_bps: 100,
+            kink_utilization_bps: 8000,
+            multiplier_bps: 2000,
+            jump_multiplier_bps: 10_000,
+            rate_floor_bps: 0,
+            rate_ceiling_bps: 10_000,
+            spread_bps: 200,
+            emergency_adjustment_bps: 0,
+            last_update: 0,
+        }
+    }
+
+    #[test]
+    fn model_formulas_cover_all_implementations() {
+        let util = 9000;
+        assert_eq!(
+            calculate_model_borrow_rate(
+                InterestRateModelKind::Linear,
+                util,
+                &cfg(InterestRateModelKind::Linear)
+            )
+            .unwrap(),
+            1900
+        );
+        assert_eq!(
+            calculate_model_borrow_rate(
+                InterestRateModelKind::Kink,
+                util,
+                &cfg(InterestRateModelKind::Kink)
+            )
+            .unwrap(),
+            7100
+        );
+        assert_eq!(
+            calculate_model_borrow_rate(
+                InterestRateModelKind::Jump,
+                util,
+                &cfg(InterestRateModelKind::Jump)
+            )
+            .unwrap(),
+            6900
+        );
+        assert_eq!(
+            calculate_model_borrow_rate(
+                InterestRateModelKind::Exponential,
+                util,
+                &cfg(InterestRateModelKind::Exponential)
+            )
+            .unwrap(),
+            9010
+        );
+    }
 }

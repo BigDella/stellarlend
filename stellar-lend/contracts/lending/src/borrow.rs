@@ -204,6 +204,7 @@ pub fn set_variable_borrow_rate_bps(
     }
 
     let update = crate::interest_rate::InterestRateConfigUpdate {
+        model: None,
         base_rate_bps: Some(rate_bps),
         kink_utilization_bps: None,
         slope_bps: None,

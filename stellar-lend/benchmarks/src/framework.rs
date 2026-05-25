@@ -73,6 +73,10 @@ impl RunConfig {
         m.insert("lending::get_user_position".into(), 400_000);
         m.insert("lending::set_oracle".into(), 300_000);
         m.insert("lending::set_pause".into(), 200_000);
+        m.insert("lending::interest_rate_model_linear".into(), 300_000);
+        m.insert("lending::interest_rate_model_kink".into(), 300_000);
+        m.insert("lending::interest_rate_model_jump".into(), 300_000);
+        m.insert("lending::interest_rate_model_exponential".into(), 300_000);
         // Hello-world (core lending) contract
         m.insert("hello_world::initialize".into(), 500_000);
         m.insert("hello_world::deposit_collateral".into(), 900_000);
