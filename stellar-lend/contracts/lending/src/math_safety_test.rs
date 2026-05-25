@@ -1,6 +1,7 @@
 use crate::borrow::BorrowCollateral;
 use crate::borrow::{
     calculate_interest, validate_collateral_ratio, BorrowDataKey, BorrowError, DebtPosition,
+    RateType,
 };
 use crate::views::{collateral_value, compute_health_factor, HEALTH_FACTOR_NO_DEBT};
 use crate::LendingContract;
@@ -17,6 +18,8 @@ fn test_interest_calculation_extreme_values() {
         interest_accrued: 0,
         last_update: 0,
         asset: Address::generate(&env),
+        rate_type: RateType::Variable,
+        stable_rate_bps: 0,
     };
 
     // Set ledger time to 1 year from now to keep result within i128 bounds
@@ -36,6 +39,8 @@ fn test_interest_calculation_extreme_values() {
         interest_accrued: 0,
         last_update: 0,
         asset: Address::generate(&env),
+        rate_type: RateType::Variable,
+        stable_rate_bps: 0,
     };
     env.ledger().with_mut(|li| li.timestamp = 3 * 31536000);
 
@@ -93,6 +98,8 @@ fn test_interest_monotonic_for_large_ledger_jumps() {
         interest_accrued: 0,
         last_update: 0,
         asset: Address::generate(&env),
+        rate_type: RateType::Variable,
+        stable_rate_bps: 0,
     };
 
     let checkpoints = [1u64, 10u64, 100u64, 500u64];
@@ -128,6 +135,8 @@ fn test_interest_returns_overflow_error_at_extreme_horizon() {
         interest_accrued: 0,
         last_update: 0,
         asset: Address::generate(&env),
+        rate_type: RateType::Variable,
+        stable_rate_bps: 0,
     };
 
     env.ledger().with_mut(|li| li.timestamp = u64::MAX);
@@ -149,6 +158,8 @@ fn test_get_user_debt_interest_addition_saturates() {
             interest_accrued: i128::MAX - 10,
             last_update: 0,
             asset: user.clone(),
+            rate_type: RateType::Variable,
+            stable_rate_bps: 0,
         };
         env.storage()
             .persistent()

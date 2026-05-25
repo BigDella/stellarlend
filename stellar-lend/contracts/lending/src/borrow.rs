@@ -15,6 +15,7 @@ pub use crate::events::{BorrowCollateralDepositEvent, BorrowEvent, RepayEvent};
 /// Backward-compatible name for collateral added to a borrow position (see [`BorrowCollateralDepositEvent`]).
 pub type DepositEvent = BorrowCollateralDepositEvent;
 
+use crate::dust::is_dust_amount;
 use crate::pause::{self, PauseType};
 use soroban_sdk::{contracterror, contracttype, Address, Env, IntoVal, Symbol, I256};
 
@@ -53,6 +54,8 @@ pub enum BorrowError {
     PositionHealthy = 10,
     /// Insufficient reserves to recover bad debt
     InsufficientReserves = 11,
+    /// Operation would create or sweep a non-dust residual amount
+    DustAmount = 12,
 }
 
 /// Borrow on behalf of a user when authorization is provided via a trusted delegate.
@@ -198,7 +201,6 @@ pub fn set_variable_borrow_rate_bps(
     if *admin != current {
         return Err(BorrowError::Unauthorized);
     }
-    admin.require_auth();
     if !(0..=10000).contains(&rate_bps) {
         return Err(BorrowError::InvalidAmount);
     }
@@ -536,17 +538,29 @@ pub fn repay_with_rate(
         remaining_repayment = 0;
     }
 
+    let mut principal_repaid = 0;
+
     // Repay principal
     if remaining_repayment > 0 {
         if remaining_repayment > debt_position.borrowed_amount {
             return Err(BorrowError::RepayAmountTooHigh);
         }
         debt_position.borrowed_amount -= remaining_repayment;
+        principal_repaid = remaining_repayment;
+    }
 
-        // Update total protocol debt
+    let remaining_debt = debt_position
+        .borrowed_amount
+        .checked_add(debt_position.interest_accrued)
+        .ok_or(BorrowError::Overflow)?;
+    if is_dust_amount(remaining_debt, get_min_borrow_amount(env)) {
+        return Err(BorrowError::DustAmount);
+    }
+
+    if principal_repaid > 0 {
         let total_debt = get_total_debt(env);
         let new_total = total_debt
-            .checked_sub(remaining_repayment)
+            .checked_sub(principal_repaid)
             .ok_or(BorrowError::Overflow)?;
         set_total_debt(env, new_total);
     }
@@ -562,6 +576,68 @@ pub fn repay_with_rate(
     .publish(env);
 
     Ok(())
+}
+
+pub(crate) fn sweep_debt_dust(
+    env: &Env,
+    user: Address,
+    asset: Address,
+) -> Result<i128, BorrowError> {
+    let variable = get_debt_position(env, &user, Some(&asset), RateType::Variable);
+    let rate_type = if variable.borrowed_amount > 0 || variable.interest_accrued > 0 {
+        RateType::Variable
+    } else {
+        RateType::Stable
+    };
+
+    let mut debt_position = get_debt_position(env, &user, Some(&asset), rate_type);
+    debt_position.rate_type = rate_type;
+
+    if debt_position.borrowed_amount == 0 && debt_position.interest_accrued == 0 {
+        return Err(BorrowError::InvalidAmount);
+    }
+    if debt_position.asset != asset {
+        return Err(BorrowError::AssetNotSupported);
+    }
+
+    let accrued_interest = calculate_interest(env, &debt_position)?;
+    debt_position.interest_accrued = debt_position
+        .interest_accrued
+        .checked_add(accrued_interest)
+        .ok_or(BorrowError::Overflow)?;
+    debt_position.last_update = env.ledger().timestamp();
+
+    let total_due = debt_position
+        .borrowed_amount
+        .checked_add(debt_position.interest_accrued)
+        .ok_or(BorrowError::Overflow)?;
+    if !is_dust_amount(total_due, get_min_borrow_amount(env)) {
+        return Err(BorrowError::DustAmount);
+    }
+
+    let principal_repaid = debt_position.borrowed_amount;
+    debt_position.borrowed_amount = 0;
+    debt_position.interest_accrued = 0;
+
+    if principal_repaid > 0 {
+        let total_debt = get_total_debt(env);
+        let new_total = total_debt
+            .checked_sub(principal_repaid)
+            .ok_or(BorrowError::Overflow)?;
+        set_total_debt(env, new_total);
+    }
+
+    save_debt_position(env, &user, &debt_position);
+
+    RepayEvent {
+        user,
+        asset,
+        amount: total_due,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(total_due)
 }
 
 pub fn switch_rate_type(
@@ -648,6 +724,16 @@ pub(crate) fn validate_collateral_ratio(collateral: i128, borrow: i128) -> Resul
     Ok(())
 }
 
+fn div_ceil_i256(env: &Env, numerator: I256, denominator: &I256) -> I256 {
+    let quotient = numerator.div(denominator);
+    let remainder = numerator.rem_euclid(denominator);
+    if remainder > I256::from_i128(env, 0) {
+        quotient.add(&I256::from_i128(env, 1))
+    } else {
+        quotient
+    }
+}
+
 pub(crate) fn calculate_interest(env: &Env, position: &DebtPosition) -> Result<i128, BorrowError> {
     if position.borrowed_amount == 0 {
         return Ok(0);
@@ -656,7 +742,6 @@ pub(crate) fn calculate_interest(env: &Env, position: &DebtPosition) -> Result<i
     let current_time = env.ledger().timestamp();
     let time_elapsed = current_time.saturating_sub(position.last_update);
 
-    let borrowed_256 = I256::from_i128(env, position.borrowed_amount);
     let rate_bps = match position.rate_type {
         RateType::Variable => get_current_variable_rate_bps(env)?,
         RateType::Stable => {
@@ -667,14 +752,14 @@ pub(crate) fn calculate_interest(env: &Env, position: &DebtPosition) -> Result<i
             }
         }
     };
-    let rate_256 = I256::from_i128(env, rate_bps);
+    let borrowed_256 = I256::from_i128(env, position.borrowed_amount);
     let time_256 = I256::from_i128(env, time_elapsed as i128);
-
-    let mut interest_256 = borrowed_256
-        .mul(&rate_256)
-        .mul(&time_256)
-        .div(&I256::from_i128(env, 10000))
-        .div(&I256::from_i128(env, SECONDS_PER_YEAR as i128));
+    let denominator =
+        I256::from_i128(env, 10000).mul(&I256::from_i128(env, SECONDS_PER_YEAR as i128));
+    let base_numerator = borrowed_256
+        .mul(&I256::from_i128(env, rate_bps))
+        .mul(&time_256);
+    let mut interest_256 = div_ceil_i256(env, base_numerator, &denominator);
 
     // Stability fee logic
     if let Some(config) = get_stablecoin_config(env, &position.asset) {
@@ -690,12 +775,10 @@ pub(crate) fn calculate_interest(env: &Env, position: &DebtPosition) -> Result<i
             };
 
             if deviation_bps > config.peg_threshold_bps {
-                let stability_fee_256 = borrowed_256
+                let stability_fee_numerator = borrowed_256
                     .mul(&I256::from_i128(env, config.stability_fee_bps))
-                    .mul(&time_256)
-                    .div(&I256::from_i128(env, 10000))
-                    .div(&I256::from_i128(env, SECONDS_PER_YEAR as i128));
-
+                    .mul(&time_256);
+                let stability_fee_256 = div_ceil_i256(env, stability_fee_numerator, &denominator);
                 interest_256 = interest_256.add(&stability_fee_256);
 
                 crate::events::PegDeviationEvent {
@@ -747,25 +830,30 @@ fn get_debt_position(
             .persistent()
             .get::<BorrowDataKey, DebtPosition>(&BorrowDataKey::BorrowUserDebt(user.clone()))
         {
-            return DebtPosition {
-                borrowed_amount: legacy.borrowed_amount,
-                interest_accrued: legacy.interest_accrued,
-                last_update: legacy.last_update,
-                asset: legacy.asset,
-                rate_type: RateType::Variable,
-                stable_rate_bps: 0,
-            };
+            if legacy.rate_type == RateType::Variable {
+                return DebtPosition {
+                    borrowed_amount: legacy.borrowed_amount,
+                    interest_accrued: legacy.interest_accrued,
+                    last_update: legacy.last_update,
+                    asset: legacy.asset,
+                    rate_type: RateType::Variable,
+                    stable_rate_bps: 0,
+                };
+            }
         }
     }
 
-    env.storage().persistent().get(&key).unwrap_or(DebtPosition {
-        borrowed_amount: 0,
-        interest_accrued: 0,
-        last_update: env.ledger().timestamp(),
-        asset: default_asset.cloned().unwrap_or_else(|| user.clone()),
-        rate_type,
-        stable_rate_bps: 0,
-    })
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(DebtPosition {
+            borrowed_amount: 0,
+            interest_accrued: 0,
+            last_update: env.ledger().timestamp(),
+            asset: default_asset.cloned().unwrap_or_else(|| user.clone()),
+            rate_type,
+            stable_rate_bps: 0,
+        })
 }
 
 fn save_debt_position(env: &Env, user: &Address, position: &DebtPosition) {
@@ -878,6 +966,10 @@ pub fn initialize_borrow_settings(
     min_borrow_amount: i128,
 ) -> Result<(), BorrowError> {
     // Note: ProtocolAdmin check should be performed by the caller (lib.rs)
+    if debt_ceiling <= 0 || min_borrow_amount <= 0 {
+        return Err(BorrowError::InvalidAmount);
+    }
+
     env.storage()
         .persistent()
         .set(&BorrowDataKey::BorrowDebtCeiling, &debt_ceiling);
@@ -888,11 +980,25 @@ pub fn initialize_borrow_settings(
     if !env
         .storage()
         .persistent()
-        .has(&BorrowDataKey::StableRatePremiumBps)
+        .has(&BorrowDataKey::StableRateState)
     {
+        let state = StableRateState {
+            avg_rate_bps: get_current_variable_rate_bps(env).unwrap_or(0),
+            last_update: env.ledger().timestamp(),
+        };
         env.storage()
             .persistent()
-            .set(&BorrowDataKey::StableRatePremiumBps, &DEFAULT_STABLE_PREMIUM_BPS);
+            .set(&BorrowDataKey::StableRateState, &state);
+    }
+    if !env
+        .storage()
+        .persistent()
+        .has(&BorrowDataKey::StableRatePremiumBps)
+    {
+        env.storage().persistent().set(
+            &BorrowDataKey::StableRatePremiumBps,
+            &DEFAULT_STABLE_PREMIUM_BPS,
+        );
     }
     if !env
         .storage()
@@ -904,7 +1010,11 @@ pub fn initialize_borrow_settings(
             &DEFAULT_STABLE_RECALC_INTERVAL_SECS,
         );
     }
-    if !env.storage().persistent().has(&BorrowDataKey::RateSwitchFeeBps) {
+    if !env
+        .storage()
+        .persistent()
+        .has(&BorrowDataKey::RateSwitchFeeBps)
+    {
         env.storage()
             .persistent()
             .set(&BorrowDataKey::RateSwitchFeeBps, &DEFAULT_SWITCH_FEE_BPS);
