@@ -1,7 +1,7 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    Address, Env,
+    token, Address, Env,
 };
 
 #[test]
@@ -249,6 +249,122 @@ fn test_deposit_separate_users() {
     let pos2 = client.get_user_collateral_deposit(&user2, &asset);
     assert_eq!(pos1.amount, 10_000);
     assert_eq!(pos2.amount, 20_000);
+}
+
+#[test]
+fn test_donation_detection_quarantines_unaccounted_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LendingContract, ());
+    let client = LendingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let asset = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &asset);
+
+    client.initialize(&admin, &1_000_000_000, &1000);
+    client.initialize_deposit_settings(&1_000_000_000, &100);
+
+    client.deposit(&user, &asset, &10_000);
+    token_admin.mint(&contract_id, &10_000);
+
+    let clean_report = client.sync_donation_balance(&asset);
+    assert!(!clean_report.donation_detected);
+    assert_eq!(clean_report.new_unaccounted_balance, 0);
+    assert_eq!(client.get_virtual_share_price_bps(&asset), 10_000);
+
+    token_admin.mint(&contract_id, &5_000);
+
+    let report = client.sync_donation_balance(&asset);
+    assert!(report.donation_detected);
+    assert_eq!(report.accounted_balance, 10_000);
+    assert_eq!(report.observed_balance, 15_000);
+    assert_eq!(report.new_unaccounted_balance, 5_000);
+    assert_eq!(report.quarantined_balance, 5_000);
+
+    // Donation balance is quarantined and does not inflate the virtual share price.
+    assert_eq!(report.virtual_share_price_bps, 10_000);
+    assert_eq!(client.get_virtual_share_price_bps(&asset), 10_000);
+
+    let stored = client.get_donation_report(&asset).unwrap();
+    assert_eq!(stored, report);
+}
+
+#[test]
+fn test_donation_defense_minimum_deposit_blocks_dust() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LendingContract, ());
+    let client = LendingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let asset = Address::generate(&env);
+
+    client.initialize(&admin, &1_000_000_000, &1000);
+    client.initialize_deposit_settings(&1_000_000_000, &100);
+    client.set_donation_defense_config(
+        &admin,
+        &DonationDefenseConfig {
+            virtual_assets: 1_000,
+            virtual_shares: 1_000,
+            max_unaccounted_bps: 100,
+            min_deposit_amount: 1_000,
+        },
+    );
+
+    let result = client.try_deposit(&user, &asset, &999);
+    assert_eq!(result, Err(Ok(DepositError::InvalidAmount)));
+
+    assert_eq!(client.deposit(&user, &asset, &1_000), 1_000);
+}
+
+#[test]
+fn test_donation_alert_blocks_liquidation_until_acknowledged() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LendingContract, ());
+    let client = LendingContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let borrower = Address::generate(&env);
+    let liquidator = Address::generate(&env);
+    let debt_asset = Address::generate(&env);
+    let collateral_asset = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &collateral_asset);
+
+    client.initialize(&admin, &1_000_000_000, &1000);
+    token_admin.mint(&contract_id, &5_000);
+
+    let report = client.sync_donation_balance(&collateral_asset);
+    assert!(report.donation_detected);
+
+    let blocked = client.try_liquidate(
+        &liquidator,
+        &borrower,
+        &debt_asset,
+        &collateral_asset,
+        &1_000,
+    );
+    assert_eq!(blocked, Err(Ok(BorrowError::ProtocolPaused)));
+
+    client.acknowledge_donation(&admin, &collateral_asset);
+    let allowed = client.try_liquidate(
+        &liquidator,
+        &borrower,
+        &debt_asset,
+        &collateral_asset,
+        &1_000,
+    );
+    assert!(allowed.is_ok());
 }
 
 #[test]

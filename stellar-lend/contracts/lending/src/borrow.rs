@@ -198,7 +198,6 @@ pub fn set_variable_borrow_rate_bps(
     if *admin != current {
         return Err(BorrowError::Unauthorized);
     }
-    admin.require_auth();
     if !(0..=10000).contains(&rate_bps) {
         return Err(BorrowError::InvalidAmount);
     }
@@ -252,6 +251,18 @@ fn get_stable_rate_state(env: &Env) -> StableRateState {
 }
 
 fn update_stable_rate_state_if_needed(env: &Env) -> StableRateState {
+    if !env
+        .storage()
+        .persistent()
+        .has(&BorrowDataKey::StableRateState)
+    {
+        let state = get_stable_rate_state(env);
+        env.storage()
+            .persistent()
+            .set(&BorrowDataKey::StableRateState, &state);
+        return state;
+    }
+
     let mut state = get_stable_rate_state(env);
     let now = env.ledger().timestamp();
     let interval = get_stable_rate_recalc_interval_secs(env);
@@ -747,25 +758,30 @@ fn get_debt_position(
             .persistent()
             .get::<BorrowDataKey, DebtPosition>(&BorrowDataKey::BorrowUserDebt(user.clone()))
         {
-            return DebtPosition {
-                borrowed_amount: legacy.borrowed_amount,
-                interest_accrued: legacy.interest_accrued,
-                last_update: legacy.last_update,
-                asset: legacy.asset,
-                rate_type: RateType::Variable,
-                stable_rate_bps: 0,
-            };
+            if legacy.rate_type == RateType::Variable {
+                return DebtPosition {
+                    borrowed_amount: legacy.borrowed_amount,
+                    interest_accrued: legacy.interest_accrued,
+                    last_update: legacy.last_update,
+                    asset: legacy.asset,
+                    rate_type: RateType::Variable,
+                    stable_rate_bps: 0,
+                };
+            }
         }
     }
 
-    env.storage().persistent().get(&key).unwrap_or(DebtPosition {
-        borrowed_amount: 0,
-        interest_accrued: 0,
-        last_update: env.ledger().timestamp(),
-        asset: default_asset.cloned().unwrap_or_else(|| user.clone()),
-        rate_type,
-        stable_rate_bps: 0,
-    })
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(DebtPosition {
+            borrowed_amount: 0,
+            interest_accrued: 0,
+            last_update: env.ledger().timestamp(),
+            asset: default_asset.cloned().unwrap_or_else(|| user.clone()),
+            rate_type,
+            stable_rate_bps: 0,
+        })
 }
 
 fn save_debt_position(env: &Env, user: &Address, position: &DebtPosition) {
@@ -890,9 +906,10 @@ pub fn initialize_borrow_settings(
         .persistent()
         .has(&BorrowDataKey::StableRatePremiumBps)
     {
-        env.storage()
-            .persistent()
-            .set(&BorrowDataKey::StableRatePremiumBps, &DEFAULT_STABLE_PREMIUM_BPS);
+        env.storage().persistent().set(
+            &BorrowDataKey::StableRatePremiumBps,
+            &DEFAULT_STABLE_PREMIUM_BPS,
+        );
     }
     if !env
         .storage()
@@ -904,7 +921,11 @@ pub fn initialize_borrow_settings(
             &DEFAULT_STABLE_RECALC_INTERVAL_SECS,
         );
     }
-    if !env.storage().persistent().has(&BorrowDataKey::RateSwitchFeeBps) {
+    if !env
+        .storage()
+        .persistent()
+        .has(&BorrowDataKey::RateSwitchFeeBps)
+    {
         env.storage()
             .persistent()
             .set(&BorrowDataKey::RateSwitchFeeBps, &DEFAULT_SWITCH_FEE_BPS);

@@ -95,6 +95,11 @@ pub(crate) fn withdraw_with_auth(
     let total_deposits = get_total_deposits(env);
     let new_total = total_deposits.checked_sub(amount).unwrap_or(0);
     set_total_deposits(env, new_total);
+    crate::deposit::subtract_asset_accounting(env, &asset, amount).map_err(|e| match e {
+        crate::deposit::DepositError::InvalidAmount => WithdrawError::InvalidAmount,
+        crate::deposit::DepositError::Overflow => WithdrawError::Overflow,
+        _ => WithdrawError::Overflow,
+    })?;
 
     WithdrawEvent {
         user,
