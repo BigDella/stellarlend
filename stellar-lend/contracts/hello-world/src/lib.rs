@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(deprecated)]
 
-use soroban_sdk::{contract, contractimpl, Address, Env, IntoVal, String, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, IntoVal, String, Symbol, Vec};
 
 pub mod admin;
 pub mod analytics;
@@ -779,6 +779,257 @@ impl HelloContract {
 
     pub fn get_mev_ordering_stats(env: Env) -> mev_protection::OrderingStats {
         mev_protection::get_ordering_stats(&env)
+    }
+
+    pub fn requires_mev_commit(env: Env, amount: i128) -> bool {
+        mev_protection::requires_commit_reveal(&env, amount)
+    }
+
+    pub fn commit_borrow_guarded(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+        max_fee_bps: i128,
+        hint: mev_protection::TxOrderingHint,
+        guard: mev_protection::ExecutionGuard,
+        private_route: Option<Symbol>,
+    ) -> Result<u64, LendingError> {
+        mev_protection::create_guarded_commit(
+            &env,
+            user,
+            mev_protection::SensitiveOperation::Borrow,
+            asset,
+            None,
+            None,
+            amount,
+            max_fee_bps,
+            hint,
+            guard,
+            private_route,
+            None,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn commit_withdraw_guarded(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+        max_fee_bps: i128,
+        hint: mev_protection::TxOrderingHint,
+        guard: mev_protection::ExecutionGuard,
+        private_route: Option<Symbol>,
+    ) -> Result<u64, LendingError> {
+        mev_protection::create_guarded_commit(
+            &env,
+            user,
+            mev_protection::SensitiveOperation::Withdraw,
+            asset,
+            None,
+            None,
+            amount,
+            max_fee_bps,
+            hint,
+            guard,
+            private_route,
+            None,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn commit_liquidation_guarded(
+        env: Env,
+        liquidator: Address,
+        borrower: Address,
+        debt_asset: Option<Address>,
+        collateral_asset: Option<Address>,
+        debt_amount: i128,
+        max_fee_bps: i128,
+        hint: mev_protection::TxOrderingHint,
+        guard: mev_protection::ExecutionGuard,
+        private_route: Option<Symbol>,
+    ) -> Result<u64, LendingError> {
+        mev_protection::create_guarded_commit(
+            &env,
+            liquidator,
+            mev_protection::SensitiveOperation::Liquidate,
+            debt_asset,
+            collateral_asset,
+            Some(borrower),
+            debt_amount,
+            max_fee_bps,
+            hint,
+            guard,
+            private_route,
+            None,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn reveal_liquidation_guarded(
+        env: Env,
+        liquidator: Address,
+        commit_id: u64,
+        expected_collateral_out: i128,
+    ) -> Result<(i128, i128, i128), LendingError> {
+        let (borrower, debt_asset, collateral_asset, debt_amount) =
+            mev_protection::reveal_liquidation_with_output(
+                &env,
+                liquidator.clone(),
+                commit_id,
+                expected_collateral_out,
+            )
+            .map_err(LendingError::from)?;
+        let result = liquidate::liquidate(
+            &env,
+            liquidator,
+            borrower,
+            debt_asset,
+            collateral_asset,
+            debt_amount,
+        )
+        .map_err(LendingError::from)?;
+        if result.1 < expected_collateral_out {
+            return Err(LendingError::LimitExceeded);
+        }
+        Ok(result)
+    }
+
+    pub fn register_private_mev_route(
+        env: Env,
+        caller: Address,
+        route_id: Symbol,
+        relay: Address,
+        ttl_secs: u64,
+    ) -> Result<mev_protection::PrivateMempoolRoute, LendingError> {
+        mev_protection::register_private_route(&env, caller, route_id, relay, ttl_secs)
+            .map_err(Into::into)
+    }
+
+    pub fn record_private_mev_exec(
+        env: Env,
+        relay: Address,
+        commit_id: u64,
+        route_id: Symbol,
+    ) -> Result<mev_protection::PrivateExecutionReceipt, LendingError> {
+        mev_protection::record_private_execution(&env, relay, commit_id, route_id)
+            .map_err(Into::into)
+    }
+
+    pub fn open_liq_batch_auction(
+        env: Env,
+        opener: Address,
+        borrower: Address,
+        debt_asset: Option<Address>,
+        collateral_asset: Option<Address>,
+        debt_amount: i128,
+        min_rebate_bps: i128,
+        bidding_period_secs: u64,
+    ) -> Result<u64, LendingError> {
+        mev_protection::open_liquidation_auction(
+            &env,
+            opener,
+            borrower,
+            debt_asset,
+            collateral_asset,
+            debt_amount,
+            min_rebate_bps,
+            bidding_period_secs,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn submit_liq_batch_bid(
+        env: Env,
+        liquidator: Address,
+        auction_id: u64,
+        repay_amount: i128,
+        rebate_bps: i128,
+        max_fee_bps: i128,
+        min_collateral_out: i128,
+        private_route: Option<Symbol>,
+    ) -> Result<u64, LendingError> {
+        mev_protection::submit_liquidation_bid(
+            &env,
+            liquidator,
+            auction_id,
+            repay_amount,
+            rebate_bps,
+            max_fee_bps,
+            min_collateral_out,
+            private_route,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn settle_liq_batch_auction(
+        env: Env,
+        caller: Address,
+        auction_id: u64,
+    ) -> Result<mev_protection::LiquidationAuctionBid, LendingError> {
+        mev_protection::settle_liquidation_auction(&env, caller, auction_id)
+            .map_err(Into::into)
+    }
+
+    pub fn commit_liq_batch_winner(
+        env: Env,
+        liquidator: Address,
+        auction_id: u64,
+        guard: mev_protection::ExecutionGuard,
+        private_route: Option<Symbol>,
+    ) -> Result<u64, LendingError> {
+        mev_protection::create_liquidation_auction_commit(
+            &env,
+            liquidator,
+            auction_id,
+            guard,
+            private_route,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn get_liq_batch_auction(
+        env: Env,
+        auction_id: u64,
+    ) -> Option<mev_protection::LiquidationAuction> {
+        mev_protection::get_liquidation_auction(&env, auction_id)
+    }
+
+    pub fn get_liq_batch_bid(
+        env: Env,
+        bid_id: u64,
+    ) -> Option<mev_protection::LiquidationAuctionBid> {
+        mev_protection::get_liquidation_bid(&env, bid_id)
+    }
+
+    pub fn record_mev_gas_bid(
+        env: Env,
+        reporter: Address,
+        operation: mev_protection::SensitiveOperation,
+        asset: Option<Address>,
+        bid_microlumens: i128,
+        inclusion_delay_ledgers: u64,
+    ) -> Result<mev_protection::GasBidStats, LendingError> {
+        mev_protection::record_gas_bid_sample(
+            &env,
+            reporter,
+            operation,
+            asset,
+            bid_microlumens,
+            inclusion_delay_ledgers,
+        )
+        .map_err(Into::into)
+    }
+
+    pub fn get_mev_dashboard(
+        env: Env,
+        operation: mev_protection::SensitiveOperation,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> mev_protection::MevMonitoringDashboard {
+        mev_protection::get_monitoring_dashboard(&env, operation, asset, amount)
     }
 
     /// Meta-tx style liquidation: liquidator authorizes intent off-chain.

@@ -1,21 +1,27 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, Val, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, Symbol, Val, Vec};
 
 mod borrow;
 mod deposit;
 mod events;
 mod flash_loan;
+mod interest_rate;
+mod mev_protection;
 mod pause;
+mod risk_monitor;
 mod token_receiver;
 mod withdraw;
 
 use borrow::{
-    borrow as borrow_cmd, deposit as borrow_deposit, get_admin as get_borrow_admin,
-    get_user_collateral as get_borrow_collateral, get_user_debt as get_borrow_debt,
+    borrow as borrow_cmd, borrow_with_rate as borrow_with_rate_logic, deposit as borrow_deposit,
+    get_admin as get_borrow_admin, get_user_collateral as get_borrow_collateral,
+    get_user_debt as get_borrow_debt, get_user_debt_with_rate as get_borrow_debt_with_rate,
     initialize_borrow_settings as initialize_borrow_logic, repay as borrow_repay,
     set_admin as set_borrow_admin,
     set_liquidation_threshold_bps as set_liquidation_threshold_logic,
-    set_oracle as set_oracle_logic, BorrowCollateral, BorrowError, DebtPosition,
+    set_oracle as set_oracle_logic, set_variable_borrow_rate_bps as set_variable_borrow_rate_logic,
+    switch_rate_type as switch_rate_type_logic, BorrowCollateral, BorrowError, DebtPosition,
+    RateType,
 };
 use deposit::{
     deposit as deposit_logic, get_user_collateral as get_deposit_collateral,
@@ -48,10 +54,9 @@ use insurance::{
     collect_premium as insurance_collect_premium, evaluate_claim as insurance_evaluate_claim,
     fund_pool as insurance_fund_pool, get_analytics as insurance_get_analytics,
     get_claim_by_id as insurance_get_claim, get_coverage_limit as insurance_get_coverage_limit,
-    get_premium_rate as insurance_get_premium_rate,
-    initialize as insurance_initialize,
-    set_coverage_limit as insurance_set_coverage_limit,
-    submit_claim as insurance_submit_claim, InsuranceAnalytics, InsuranceClaim, InsuranceError,
+    get_premium_rate as insurance_get_premium_rate, initialize as insurance_initialize,
+    set_coverage_limit as insurance_set_coverage_limit, submit_claim as insurance_submit_claim,
+    InsuranceAnalytics, InsuranceClaim, InsuranceError,
 };
 
 #[cfg(test)]
@@ -185,9 +190,108 @@ impl LendingContract {
         Ok(())
     }
 
+    pub fn commit_large_tx(
+        env: Env,
+        owner: Address,
+        operation: Symbol,
+        amount: i128,
+        quoted_output: i128,
+        min_output: i128,
+        max_slippage_bps: i128,
+        deadline: u64,
+    ) -> Result<u64, mev_protection::MevGuardError> {
+        mev_protection::commit_large_tx(
+            &env,
+            owner,
+            operation,
+            amount,
+            quoted_output,
+            min_output,
+            max_slippage_bps,
+            deadline,
+        )
+    }
+
+    pub fn borrow_with_rate(
+        env: Env,
+        user: Address,
+        asset: Address,
+        amount: i128,
+        collateral_asset: Address,
+        collateral_amount: i128,
+        rate_type: RateType,
+    ) -> Result<(), BorrowError> {
+        borrow_with_rate_logic(
+            &env,
+            user,
+            asset,
+            amount,
+            collateral_asset,
+            collateral_amount,
+            rate_type,
+        )
+    }
+
+    pub fn set_variable_borrow_rate_bps(
+        env: Env,
+        admin: Address,
+        rate_bps: i128,
+    ) -> Result<(), BorrowError> {
+        set_variable_borrow_rate_logic(&env, &admin, rate_bps)
+    }
+
+    pub fn switch_rate_type(
+        env: Env,
+        user: Address,
+        asset: Address,
+        to_rate_type: RateType,
+    ) -> Result<(), BorrowError> {
+        switch_rate_type_logic(&env, user, asset, to_rate_type)
+    }
+
+    pub fn reveal_large_tx(
+        env: Env,
+        owner: Address,
+        commit_id: u64,
+        actual_output: i128,
+    ) -> Result<mev_protection::LendingMevCommitment, mev_protection::MevGuardError> {
+        mev_protection::reveal_large_tx(&env, owner, commit_id, actual_output)
+    }
+
+    pub fn get_large_tx_commit(
+        env: Env,
+        commit_id: u64,
+    ) -> Option<mev_protection::LendingMevCommitment> {
+        mev_protection::get_commit(&env, commit_id)
+    }
+
+    pub fn record_lending_mev_gas(
+        env: Env,
+        reporter: Address,
+        operation: Symbol,
+        bid_microlumens: i128,
+        inclusion_delay_ledgers: u64,
+    ) -> Result<mev_protection::LendingGasBidStats, mev_protection::MevGuardError> {
+        mev_protection::record_gas_bid(
+            &env,
+            reporter,
+            operation,
+            bid_microlumens,
+            inclusion_delay_ledgers,
+        )
+    }
+
+    pub fn get_lending_mev_gas(env: Env, operation: Symbol) -> mev_protection::LendingGasBidStats {
+        mev_protection::get_gas_bid_stats(&env, operation)
+    }
+
     /// Get user's debt position
     pub fn get_user_debt(env: Env, user: Address) -> DebtPosition {
         get_borrow_debt(&env, &user)
+    }
+
+    pub fn get_user_debt_with_rate(env: Env, user: Address, rate_type: RateType) -> DebtPosition {
+        get_borrow_debt_with_rate(&env, &user, rate_type)
     }
 
     /// Get user's collateral position (borrow module)
