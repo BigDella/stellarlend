@@ -1,5 +1,8 @@
 use super::*;
-use soroban_sdk::{testutils::Address as _, token, Address, Bytes, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    token, Address, Bytes, Env,
+};
 
 // Mock receiver contract that implements the flash loan callback
 #[contract]
@@ -108,6 +111,102 @@ fn test_flash_loan_success() {
     let token_client = token::Client::new(&env, &asset);
     assert_eq!(token_client.balance(&contract_id), 100_000 + fee);
     assert_eq!(token_client.balance(&receiver_address), 1000 - fee);
+
+    let snapshot = client
+        .get_flash_loan_security_snapshot(&asset)
+        .expect("security snapshot should be recorded");
+    assert_eq!(snapshot.amount, amount);
+    assert_eq!(snapshot.loan_to_liquidity_bps, 1000);
+}
+
+#[test]
+fn test_flash_loan_rejects_amount_above_liquidity_limit() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LendingContract, ());
+    let client = LendingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let asset = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &asset);
+    let receiver = env.register(FlashLoanReceiver, ());
+
+    client.initialize(&admin, &1_000_000_000, &1000);
+    client.set_flash_loan_security_config(&FlashLoanSecurityConfig {
+        max_loan_to_liquidity_bps: 3_000,
+        max_price_impact_bps: 10_000,
+        max_twap_deviation_bps: 10_000,
+        twap_window_seconds: 600,
+        max_observations: 32,
+    });
+    token_admin.mint(&contract_id, &100_000);
+
+    let result = client.try_flash_loan(&receiver, &asset, &40_000, &Bytes::new(&env));
+    assert_eq!(result, Err(Ok(FlashLoanError::FlashLoanLimitExceeded)));
+}
+
+#[test]
+fn test_flash_loan_rejects_excessive_price_impact() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LendingContract, ());
+    let client = LendingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let asset = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &asset);
+    let receiver = env.register(FlashLoanReceiver, ());
+
+    client.initialize(&admin, &1_000_000_000, &1000);
+    client.set_flash_loan_security_config(&FlashLoanSecurityConfig {
+        max_loan_to_liquidity_bps: 10_000,
+        max_price_impact_bps: 500,
+        max_twap_deviation_bps: 10_000,
+        twap_window_seconds: 600,
+        max_observations: 32,
+    });
+    token_admin.mint(&contract_id, &100_000);
+
+    let result = client.try_flash_loan(&receiver, &asset, &10_000, &Bytes::new(&env));
+    assert_eq!(result, Err(Ok(FlashLoanError::PriceImpactTooHigh)));
+}
+
+#[test]
+fn test_flash_loan_rejects_twap_liquidity_manipulation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(LendingContract, ());
+    let client = LendingContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let asset = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_admin = token::StellarAssetClient::new(&env, &asset);
+    let receiver = env.register(FlashLoanReceiver, ());
+
+    client.initialize(&admin, &1_000_000_000, &1000);
+    client.set_flash_loan_security_config(&FlashLoanSecurityConfig {
+        max_loan_to_liquidity_bps: 10_000,
+        max_price_impact_bps: 10_000,
+        max_twap_deviation_bps: 500,
+        twap_window_seconds: 600,
+        max_observations: 32,
+    });
+    token_admin.mint(&contract_id, &100_000);
+    token_admin.mint(&receiver, &100);
+
+    client.flash_loan(&receiver, &asset, &1_000, &Bytes::new(&env));
+    env.ledger().with_mut(|li| li.timestamp += 60);
+
+    // Simulates a same-window liquidity/price manipulation before a larger loan.
+    token_admin.mint(&contract_id, &50_000);
+    let result = client.try_flash_loan(&receiver, &asset, &1_000, &Bytes::new(&env));
+    assert_eq!(result, Err(Ok(FlashLoanError::TwapDeviationExceeded)));
 }
 
 #[test]

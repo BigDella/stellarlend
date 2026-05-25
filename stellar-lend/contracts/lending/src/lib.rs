@@ -5,25 +5,34 @@ mod borrow;
 mod deposit;
 mod events;
 mod flash_loan;
+mod interest_rate;
 mod pause;
+mod risk_monitor;
 mod token_receiver;
 mod withdraw;
 
 use borrow::{
     borrow as borrow_cmd, deposit as borrow_deposit, get_admin as get_borrow_admin,
     get_user_collateral as get_borrow_collateral, get_user_debt as get_borrow_debt,
+    get_user_debt_with_rate as get_user_debt_with_rate_logic,
     initialize_borrow_settings as initialize_borrow_logic, repay as borrow_repay,
     set_admin as set_borrow_admin,
     set_liquidation_threshold_bps as set_liquidation_threshold_logic,
-    set_oracle as set_oracle_logic, BorrowCollateral, BorrowError, DebtPosition,
+    set_oracle as set_oracle_logic, set_variable_borrow_rate_bps as set_variable_borrow_rate_logic,
+    switch_rate_type as switch_rate_type_logic, BorrowCollateral, BorrowError, DebtPosition,
+    RateType,
 };
 use deposit::{
     deposit as deposit_logic, get_user_collateral as get_deposit_collateral,
     initialize_deposit_settings as initialize_deposit_logic, DepositCollateral, DepositError,
 };
 use flash_loan::{
-    flash_loan as flash_loan_logic, set_flash_loan_fee_bps as set_flash_loan_fee_logic,
-    FlashLoanError,
+    flash_loan as flash_loan_logic,
+    get_flash_loan_security_config as get_flash_loan_security_config_logic,
+    get_flash_loan_security_snapshot as get_flash_loan_security_snapshot_logic,
+    is_asset_flash_loan_active, set_flash_loan_fee_bps as set_flash_loan_fee_logic,
+    set_flash_loan_security_config as set_flash_loan_security_config_logic, FlashLoanError,
+    FlashLoanSecurityConfig, FlashLoanSecuritySnapshot,
 };
 use pause::{is_paused, set_pause as set_pause_logic, PauseType};
 use token_receiver::receive as receive_logic;
@@ -48,10 +57,9 @@ use insurance::{
     collect_premium as insurance_collect_premium, evaluate_claim as insurance_evaluate_claim,
     fund_pool as insurance_fund_pool, get_analytics as insurance_get_analytics,
     get_claim_by_id as insurance_get_claim, get_coverage_limit as insurance_get_coverage_limit,
-    get_premium_rate as insurance_get_premium_rate,
-    initialize as insurance_initialize,
-    set_coverage_limit as insurance_set_coverage_limit,
-    submit_claim as insurance_submit_claim, InsuranceAnalytics, InsuranceClaim, InsuranceError,
+    get_premium_rate as insurance_get_premium_rate, initialize as insurance_initialize,
+    set_coverage_limit as insurance_set_coverage_limit, submit_claim as insurance_submit_claim,
+    InsuranceAnalytics, InsuranceClaim, InsuranceError,
 };
 
 #[cfg(test)]
@@ -116,6 +124,46 @@ impl LendingContract {
         )
     }
 
+    /// Borrow assets with an explicit variable/stable rate selection.
+    pub fn borrow_with_rate(
+        env: Env,
+        user: Address,
+        asset: Address,
+        amount: i128,
+        collateral_asset: Address,
+        collateral_amount: i128,
+        rate_type: RateType,
+    ) -> Result<(), BorrowError> {
+        borrow::borrow_with_rate(
+            &env,
+            user,
+            asset,
+            amount,
+            collateral_asset,
+            collateral_amount,
+            rate_type,
+        )
+    }
+
+    /// Update the variable borrow rate base model (admin only).
+    pub fn set_variable_borrow_rate_bps(
+        env: Env,
+        admin: Address,
+        rate_bps: i128,
+    ) -> Result<(), BorrowError> {
+        set_variable_borrow_rate_logic(&env, &admin, rate_bps)
+    }
+
+    /// Switch an existing debt position between variable and stable accounting.
+    pub fn switch_rate_type(
+        env: Env,
+        user: Address,
+        asset: Address,
+        rate_type: RateType,
+    ) -> Result<(), BorrowError> {
+        switch_rate_type_logic(&env, user, asset, rate_type)
+    }
+
     /// Set protocol pause state for a specific operation (admin only)
     pub fn set_pause(
         env: Env,
@@ -173,12 +221,17 @@ impl LendingContract {
         env: Env,
         liquidator: Address,
         _borrower: Address,
-        _debt_asset: Address,
-        _collateral_asset: Address,
+        debt_asset: Address,
+        collateral_asset: Address,
         _amount: i128,
     ) -> Result<(), BorrowError> {
         liquidator.require_auth();
         if is_paused(&env, PauseType::Liquidation) {
+            return Err(BorrowError::ProtocolPaused);
+        }
+        if is_asset_flash_loan_active(&env, &debt_asset)
+            || is_asset_flash_loan_active(&env, &collateral_asset)
+        {
             return Err(BorrowError::ProtocolPaused);
         }
         // Stub implementation, or call borrow::liquidate if it exists
@@ -188,6 +241,11 @@ impl LendingContract {
     /// Get user's debt position
     pub fn get_user_debt(env: Env, user: Address) -> DebtPosition {
         get_borrow_debt(&env, &user)
+    }
+
+    /// Get user's debt position for a specific rate bucket.
+    pub fn get_user_debt_with_rate(env: Env, user: Address, rate_type: RateType) -> DebtPosition {
+        get_user_debt_with_rate_logic(&env, &user, rate_type)
     }
 
     /// Get user's collateral position (borrow module)
@@ -290,6 +348,29 @@ impl LendingContract {
         let current_admin = get_borrow_admin(&env).ok_or(FlashLoanError::Unauthorized)?;
         current_admin.require_auth();
         set_flash_loan_fee_logic(&env, fee_bps)
+    }
+
+    /// Configure flash loan manipulation guards (admin only).
+    pub fn set_flash_loan_security_config(
+        env: Env,
+        config: FlashLoanSecurityConfig,
+    ) -> Result<(), FlashLoanError> {
+        let current_admin = get_borrow_admin(&env).ok_or(FlashLoanError::Unauthorized)?;
+        current_admin.require_auth();
+        set_flash_loan_security_config_logic(&env, config)
+    }
+
+    /// Get the active flash loan manipulation guard configuration.
+    pub fn get_flash_loan_security_config(env: Env) -> FlashLoanSecurityConfig {
+        get_flash_loan_security_config_logic(&env)
+    }
+
+    /// Get the latest security snapshot recorded for an asset flash loan.
+    pub fn get_flash_loan_security_snapshot(
+        env: Env,
+        asset: Address,
+    ) -> Option<FlashLoanSecuritySnapshot> {
+        get_flash_loan_security_snapshot_logic(&env, &asset)
     }
 
     /// Withdraw collateral from the protocol
