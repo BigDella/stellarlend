@@ -291,9 +291,7 @@ pub fn initialize(env: &Env, admin: &Address) -> Result<(), InsuranceError> {
         return Err(InsuranceError::AlreadyInitialized);
     }
     admin.require_auth();
-    env.storage()
-        .persistent()
-        .set(&InsuranceKey::Admin, admin);
+    env.storage().persistent().set(&InsuranceKey::Admin, admin);
     Ok(())
 }
 

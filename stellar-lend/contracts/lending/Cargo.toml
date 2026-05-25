@@ -26,3 +26,6 @@ testutils = ["soroban-sdk/testutils"]
 spec = []
 # Kani bounded model-checking harnesses (requires `cargo kani`).
 kani = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }

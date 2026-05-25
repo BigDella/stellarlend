@@ -33,7 +33,12 @@ pub enum WithdrawError {
 
 impl WithdrawState {
     pub fn new(collateral: i128, total: i128, debt: i128, min: i128) -> Self {
-        Self { user_collateral: collateral, total_deposits: total, outstanding_debt: debt, min_withdraw: min }
+        Self {
+            user_collateral: collateral,
+            total_deposits: total,
+            outstanding_debt: debt,
+            min_withdraw: min,
+        }
     }
 
     pub fn apply_withdraw(&mut self, amount: i128) -> Result<(), WithdrawError> {
@@ -43,10 +48,14 @@ impl WithdrawState {
         if amount > self.user_collateral {
             return Err(WithdrawError::InsufficientCollateral);
         }
-        let remaining = self.user_collateral.checked_sub(amount).ok_or(WithdrawError::Overflow)?;
+        let remaining = self
+            .user_collateral
+            .checked_sub(amount)
+            .ok_or(WithdrawError::Overflow)?;
         // Enforce collateral ratio if user has outstanding debt
         if self.outstanding_debt > 0 {
-            let min_collateral = self.outstanding_debt
+            let min_collateral = self
+                .outstanding_debt
                 .checked_mul(MIN_COLLATERAL_RATIO_BPS)
                 .ok_or(WithdrawError::Overflow)?
                 .checked_div(BPS_DIVISOR)
@@ -65,14 +74,22 @@ impl WithdrawState {
 #[test]
 fn lemma_w01_zero_amount_rejected() {
     let mut s = WithdrawState::new(100_000, 100_000, 0, 0);
-    assert_eq!(s.apply_withdraw(0), Err(WithdrawError::InvalidAmount), "W-01");
+    assert_eq!(
+        s.apply_withdraw(0),
+        Err(WithdrawError::InvalidAmount),
+        "W-01"
+    );
 }
 
 /// **W-02**: Withdraw exceeding balance is rejected.
 #[test]
 fn lemma_w02_over_balance_rejected() {
     let mut s = WithdrawState::new(100_000, 100_000, 0, 0);
-    assert_eq!(s.apply_withdraw(100_001), Err(WithdrawError::InsufficientCollateral), "W-02");
+    assert_eq!(
+        s.apply_withdraw(100_001),
+        Err(WithdrawError::InsufficientCollateral),
+        "W-02"
+    );
 }
 
 /// **W-03**: Remaining balance satisfies the collateral ratio for outstanding debt.
@@ -88,7 +105,10 @@ fn lemma_w03_collateral_ratio_maintained() {
     );
     // Withdrawing 0 of existing debt leaves ratio intact (no-op via W-01)
     // Confirm balance is unchanged
-    assert_eq!(s.user_collateral, 150_000, "W-03: balance mutated on rejection");
+    assert_eq!(
+        s.user_collateral, 150_000,
+        "W-03: balance mutated on rejection"
+    );
 }
 
 /// **W-04**: User balance decreases by exactly the withdrawn amount.
@@ -126,5 +146,8 @@ fn lemma_w07_insufficient_collateral_for_debt_rejected() {
         Err(WithdrawError::InsufficientCollateralRatio),
         "W-07"
     );
-    assert_eq!(s.user_collateral, 200_000, "W-07: state mutated on rejection");
+    assert_eq!(
+        s.user_collateral, 200_000,
+        "W-07: state mutated on rejection"
+    );
 }

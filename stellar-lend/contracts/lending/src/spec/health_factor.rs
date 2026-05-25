@@ -48,7 +48,9 @@ pub fn reference_health_factor(
         .checked_mul(liq_threshold_bps)?
         .checked_div(BPS_DIVISOR)?;
     // HF = weighted * HF_SCALE / debt_value
-    let hf = weighted.checked_mul(HEALTH_FACTOR_SCALE)?.checked_div(debt_value)?;
+    let hf = weighted
+        .checked_mul(HEALTH_FACTOR_SCALE)?
+        .checked_div(debt_value)?;
     Some(hf)
 }
 
@@ -75,31 +77,24 @@ fn lemma_h03_hf_scale_liquidation_boundary() {
     let collateral = debt * BPS_DIVISOR / DEFAULT_LIQ_THRESHOLD_BPS; // = 1_250_000
     let hf = reference_health_factor(collateral, debt, true, DEFAULT_LIQ_THRESHOLD_BPS, true)
         .expect("H-03: exact threshold");
-    assert_eq!(hf, HEALTH_FACTOR_SCALE, "H-03: exact threshold HF should equal HF_SCALE");
+    assert_eq!(
+        hf, HEALTH_FACTOR_SCALE,
+        "H-03: exact threshold HF should equal HF_SCALE"
+    );
 
     // Use 2x collateral → HF should be 2 * HF_SCALE (clearly healthy)
-    let hf_above = reference_health_factor(
-        collateral * 2,
-        debt,
-        true,
-        DEFAULT_LIQ_THRESHOLD_BPS,
-        true,
-    )
-    .expect("H-03 above");
+    let hf_above =
+        reference_health_factor(collateral * 2, debt, true, DEFAULT_LIQ_THRESHOLD_BPS, true)
+            .expect("H-03 above");
     assert!(
         hf_above > HEALTH_FACTOR_SCALE,
         "H-03: 2x collateral should be healthy, got hf={hf_above}"
     );
 
     // Half the exact-threshold collateral → HF should be HF_SCALE/2 (liquidatable)
-    let hf_below = reference_health_factor(
-        collateral / 2,
-        debt,
-        true,
-        DEFAULT_LIQ_THRESHOLD_BPS,
-        true,
-    )
-    .expect("H-03 below");
+    let hf_below =
+        reference_health_factor(collateral / 2, debt, true, DEFAULT_LIQ_THRESHOLD_BPS, true)
+            .expect("H-03 below");
     assert!(
         hf_below < HEALTH_FACTOR_SCALE,
         "H-03: half collateral should be liquidatable, got hf={hf_below}"
@@ -113,8 +108,8 @@ fn lemma_h04_monotone_increasing_in_collateral() {
     let collateral_values: &[i128] = &[0, 100_000, 500_000, 800_000, 1_000_000, 5_000_000];
     let mut prev = 0i128;
     for &cv in collateral_values {
-        let hf = reference_health_factor(cv, debt, true, DEFAULT_LIQ_THRESHOLD_BPS, true)
-            .unwrap_or(0);
+        let hf =
+            reference_health_factor(cv, debt, true, DEFAULT_LIQ_THRESHOLD_BPS, true).unwrap_or(0);
         assert!(
             hf >= prev,
             "H-04: HF not monotone at cv={cv}: hf={hf} < prev={prev}"
@@ -161,7 +156,10 @@ fn lemma_h07_exact_threshold_yields_hf_scale() {
     let collateral = debt * BPS_DIVISOR / DEFAULT_LIQ_THRESHOLD_BPS;
     let hf = reference_health_factor(collateral, debt, true, DEFAULT_LIQ_THRESHOLD_BPS, true)
         .expect("H-07");
-    assert_eq!(hf, HEALTH_FACTOR_SCALE, "H-07: boundary HF should be exactly HF_SCALE");
+    assert_eq!(
+        hf, HEALTH_FACTOR_SCALE,
+        "H-07: boundary HF should be exactly HF_SCALE"
+    );
 }
 
 #[cfg(kani)]
@@ -182,7 +180,10 @@ pub fn kani_health_factor_properties() {
     );
 
     if debt_value == 0 {
-        kani::assert(hf == Some(HEALTH_FACTOR_NO_DEBT), "H-01: zero debt sentinel");
+        kani::assert(
+            hf == Some(HEALTH_FACTOR_NO_DEBT),
+            "H-01: zero debt sentinel",
+        );
     }
     if let Some(h) = hf {
         kani::assert(h >= 0, "HF must be non-negative");

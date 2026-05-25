@@ -41,21 +41,38 @@ pub enum AccountingError {
 
 impl AccountingState {
     pub fn new(ceiling: i128) -> Self {
-        Self { total_debt: 0, debt_ceiling: ceiling, user_principal: 0, user_interest: 0 }
+        Self {
+            total_debt: 0,
+            debt_ceiling: ceiling,
+            user_principal: 0,
+            user_interest: 0,
+        }
     }
 
     pub fn apply_borrow(&mut self, amount: i128) -> Result<(), AccountingError> {
-        if amount <= 0 { return Err(AccountingError::InvalidAmount); }
-        let new_total = self.total_debt.checked_add(amount).ok_or(AccountingError::Overflow)?;
-        if new_total > self.debt_ceiling { return Err(AccountingError::DebtCeilingReached); }
-        let new_user = self.user_principal.checked_add(amount).ok_or(AccountingError::Overflow)?;
+        if amount <= 0 {
+            return Err(AccountingError::InvalidAmount);
+        }
+        let new_total = self
+            .total_debt
+            .checked_add(amount)
+            .ok_or(AccountingError::Overflow)?;
+        if new_total > self.debt_ceiling {
+            return Err(AccountingError::DebtCeilingReached);
+        }
+        let new_user = self
+            .user_principal
+            .checked_add(amount)
+            .ok_or(AccountingError::Overflow)?;
         self.total_debt = new_total;
         self.user_principal = new_user;
         Ok(())
     }
 
     pub fn apply_repay(&mut self, amount: i128) -> Result<(), AccountingError> {
-        if amount <= 0 { return Err(AccountingError::InvalidAmount); }
+        if amount <= 0 {
+            return Err(AccountingError::InvalidAmount);
+        }
         let mut remaining = amount;
         if remaining >= self.user_interest {
             remaining -= self.user_interest;
@@ -65,9 +82,14 @@ impl AccountingState {
             remaining = 0;
         }
         if remaining > 0 {
-            if remaining > self.user_principal { return Err(AccountingError::RepayAmountTooHigh); }
+            if remaining > self.user_principal {
+                return Err(AccountingError::RepayAmountTooHigh);
+            }
             self.user_principal -= remaining;
-            self.total_debt = self.total_debt.checked_sub(remaining).ok_or(AccountingError::Overflow)?;
+            self.total_debt = self
+                .total_debt
+                .checked_sub(remaining)
+                .ok_or(AccountingError::Overflow)?;
         }
         Ok(())
     }
@@ -80,7 +102,11 @@ fn lemma_a01_borrow_increments_total_debt() {
         let mut state = AccountingState::new(i128::MAX);
         let before = state.total_debt;
         state.apply_borrow(amount).expect("A-01");
-        assert_eq!(state.total_debt, before + amount, "A-01 failed for amount={amount}");
+        assert_eq!(
+            state.total_debt,
+            before + amount,
+            "A-01 failed for amount={amount}"
+        );
     }
 }
 
@@ -103,7 +129,11 @@ fn lemma_a03_total_debt_stays_non_negative() {
     let mut state = AccountingState::new(i128::MAX);
     state.apply_borrow(100_000).unwrap();
     state.apply_repay(100_000).expect("A-03");
-    assert!(state.total_debt >= 0, "A-03: negative total_debt={}", state.total_debt);
+    assert!(
+        state.total_debt >= 0,
+        "A-03: negative total_debt={}",
+        state.total_debt
+    );
     assert_eq!(state.total_debt, 0, "A-03");
 }
 
@@ -113,7 +143,11 @@ fn lemma_a04_borrow_ceiling_enforced() {
     let ceiling = 1_000_000i128;
     let mut state = AccountingState::new(ceiling);
     state.apply_borrow(ceiling).expect("A-04");
-    assert_eq!(state.apply_borrow(1), Err(AccountingError::DebtCeilingReached), "A-04");
+    assert_eq!(
+        state.apply_borrow(1),
+        Err(AccountingError::DebtCeilingReached),
+        "A-04"
+    );
     assert_eq!(state.total_debt, ceiling, "A-04: ceiling breached");
 }
 
@@ -144,7 +178,11 @@ fn lemma_a06_partial_repay_leaves_correct_remainder() {
 fn lemma_a07_over_repay_is_rejected() {
     let mut state = AccountingState::new(i128::MAX);
     state.apply_borrow(50_000).unwrap();
-    assert_eq!(state.apply_repay(50_001), Err(AccountingError::RepayAmountTooHigh), "A-07");
+    assert_eq!(
+        state.apply_repay(50_001),
+        Err(AccountingError::RepayAmountTooHigh),
+        "A-07"
+    );
     assert_eq!(state.user_principal, 50_000, "A-07: state mutated");
     assert_eq!(state.total_debt, 50_000, "A-07: total_debt mutated");
 }
@@ -154,7 +192,11 @@ fn lemma_a07_over_repay_is_rejected() {
 fn lemma_a08_borrow_beyond_ceiling_is_rejected() {
     let mut state = AccountingState::new(500_000);
     state.apply_borrow(300_000).unwrap();
-    assert_eq!(state.apply_borrow(250_000), Err(AccountingError::DebtCeilingReached), "A-08");
+    assert_eq!(
+        state.apply_borrow(250_000),
+        Err(AccountingError::DebtCeilingReached),
+        "A-08"
+    );
     assert_eq!(state.total_debt, 300_000, "A-08: state mutated");
 }
 

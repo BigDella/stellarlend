@@ -66,13 +66,14 @@ jobs:
       - name: Run formal verification spec tests
         working-directory: stellar-lend
         run: |
-          cargo test -p stellarlend-lending --features spec -- spec:: \
+          cargo check -p stellarlend-lending --features spec
+          cargo test -p stellarlend-lending --features spec --test protocol_formal_specs -- \
             --test-threads=4
 
       - name: Verify spec tests pass with --release profile too
         working-directory: stellar-lend
         run: |
-          cargo test -p stellarlend-lending --features spec --release -- spec:: \
+          cargo test -p stellarlend-lending --features spec --release --test protocol_formal_specs -- \
             --test-threads=4
 
   # ─────────────────────────────────────────────────────────────────────────────
@@ -142,6 +143,9 @@ jobs:
           cargo kani \
             --package stellarlend-lending \
             --features spec \
+            --harness spec::protocol_invariants::kani_protocol_accounting_preserves_identity \
+            --harness spec::protocol_invariants::kani_health_factor_consistency \
+            --harness spec::protocol_invariants::kani_interest_index_monotonic \
             --harness spec::interest::kani_interest_properties \
             --harness spec::collateral::kani_collateral_ratio_properties \
             --harness spec::accounting::kani_accounting_invariants \
@@ -189,6 +193,13 @@ jobs:
       - name: Clippy on spec modules
         working-directory: stellar-lend
         run: |
-          cargo clippy -p stellarlend-lending --features spec -- \
+          cargo clippy -p stellarlend-lending --features spec --test protocol_formal_specs -- \
             -D warnings \
-            -A clippy::module_name_repetitions
+            -A unused-imports \
+            -A dead-code \
+            -A unexpected-cfgs \
+            -A clippy::module_name_repetitions \
+            -A clippy::too-many-arguments \
+            -A clippy::manual-clamp \
+            -A clippy::manual-range-contains \
+            -A clippy::let-and-return

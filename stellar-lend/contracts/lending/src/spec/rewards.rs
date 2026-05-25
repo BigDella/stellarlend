@@ -47,7 +47,9 @@ impl RewardsState {
 
     /// Update global index to `now`.
     pub fn update_global(&mut self, now: i128) {
-        if now == self.last_update { return; }
+        if now == self.last_update {
+            return;
+        }
         if self.total_liquidity == 0 {
             self.last_update = now;
             return;
@@ -92,7 +94,10 @@ fn lemma_r02_zero_liquidity_index_unchanged() {
     let mut state = RewardsState::new(1_000, 0);
     let initial_index = state.global_index;
     state.update_global(3600);
-    assert_eq!(state.global_index, initial_index, "R-02: index changed with zero liquidity");
+    assert_eq!(
+        state.global_index, initial_index,
+        "R-02: index changed with zero liquidity"
+    );
 }
 
 /// **R-03**: Zero emission rate keeps global index unchanged.
@@ -101,7 +106,10 @@ fn lemma_r03_zero_emission_rate_index_unchanged() {
     let mut state = RewardsState::new(0, 1_000_000);
     let initial_index = state.global_index;
     state.update_global(86_400);
-    assert_eq!(state.global_index, initial_index, "R-03: index changed with zero emission");
+    assert_eq!(
+        state.global_index, initial_index,
+        "R-03: index changed with zero emission"
+    );
 }
 
 /// **R-04**: User accrual is non-negative for non-negative balance and positive index delta.
@@ -111,7 +119,11 @@ fn lemma_r04_user_accrual_is_non_negative() {
     state.update_global(1000); // Advance global index
     let balance = 100_000i128;
     state.update_user(1000, balance);
-    assert!(state.user_accrued >= 0, "R-04: negative user accrual={}", state.user_accrued);
+    assert!(
+        state.user_accrued >= 0,
+        "R-04: negative user accrual={}",
+        state.user_accrued
+    );
 }
 
 /// **R-05**: Same-timestamp update is idempotent (global index unchanged).
@@ -121,7 +133,10 @@ fn lemma_r05_same_timestamp_is_idempotent() {
     state.update_global(3600);
     let index_after_first = state.global_index;
     state.update_global(3600); // Same timestamp
-    assert_eq!(state.global_index, index_after_first, "R-05: second update at same time changed index");
+    assert_eq!(
+        state.global_index, index_after_first,
+        "R-05: second update at same time changed index"
+    );
 }
 
 /// **R-06**: Claim zeroes user accrued rewards.
@@ -130,7 +145,10 @@ fn lemma_r06_claim_zeroes_accrued() {
     let mut state = RewardsState::new(500, 1_000_000);
     state.update_user(10_000, 500_000);
     state.claim();
-    assert_eq!(state.user_accrued, 0, "R-06: accrued not zeroed after claim");
+    assert_eq!(
+        state.user_accrued, 0,
+        "R-06: accrued not zeroed after claim"
+    );
 }
 
 /// **R-07**: No overflow for realistic emission and time values.

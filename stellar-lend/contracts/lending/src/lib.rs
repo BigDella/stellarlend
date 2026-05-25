@@ -5,7 +5,9 @@ mod borrow;
 mod deposit;
 mod events;
 mod flash_loan;
+mod interest_rate;
 mod pause;
+mod risk_monitor;
 mod token_receiver;
 mod withdraw;
 
@@ -48,10 +50,9 @@ use insurance::{
     collect_premium as insurance_collect_premium, evaluate_claim as insurance_evaluate_claim,
     fund_pool as insurance_fund_pool, get_analytics as insurance_get_analytics,
     get_claim_by_id as insurance_get_claim, get_coverage_limit as insurance_get_coverage_limit,
-    get_premium_rate as insurance_get_premium_rate,
-    initialize as insurance_initialize,
-    set_coverage_limit as insurance_set_coverage_limit,
-    submit_claim as insurance_submit_claim, InsuranceAnalytics, InsuranceClaim, InsuranceError,
+    get_premium_rate as insurance_get_premium_rate, initialize as insurance_initialize,
+    set_coverage_limit as insurance_set_coverage_limit, submit_claim as insurance_submit_claim,
+    InsuranceAnalytics, InsuranceClaim, InsuranceError,
 };
 
 #[cfg(test)]
@@ -68,6 +69,8 @@ mod insurance_test;
 mod math_safety_test;
 #[cfg(test)]
 mod pause_test;
+#[cfg(any(test, feature = "spec"))]
+mod spec;
 #[cfg(test)]
 mod token_receiver_test;
 #[cfg(test)]

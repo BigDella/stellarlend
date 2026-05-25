@@ -1,6 +1,6 @@
 use soroban_sdk::{contracterror, contracttype, Address, Env};
 
-use crate::borrow::{get_admin, get_debt_ceiling, get_total_debt, BorrowError, BorrowDataKey};
+use crate::borrow::{get_admin, get_debt_ceiling, get_total_debt, BorrowDataKey, BorrowError};
 
 const BPS_SCALE: i128 = 10_000;
 

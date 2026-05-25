@@ -79,11 +79,7 @@ pub fn reference_interest(principal: i128, elapsed_secs: i128) -> Option<i128> {
 fn lemma_i01_zero_principal_yields_zero() {
     for elapsed in [0i128, 1, 60, 3600, SECONDS_PER_YEAR, i128::MAX / 2] {
         let result = reference_interest(0, elapsed);
-        assert_eq!(
-            result,
-            Some(0),
-            "I-01 failed for elapsed={elapsed}"
-        );
+        assert_eq!(result, Some(0), "I-01 failed for elapsed={elapsed}");
     }
 }
 
@@ -92,11 +88,7 @@ fn lemma_i01_zero_principal_yields_zero() {
 fn lemma_i02_zero_elapsed_yields_zero() {
     for principal in [0i128, 1, 1_000, 1_000_000, MAX_SAFE_PRINCIPAL] {
         let result = reference_interest(principal, 0);
-        assert_eq!(
-            result,
-            Some(0),
-            "I-02 failed for principal={principal}"
-        );
+        assert_eq!(result, Some(0), "I-02 failed for principal={principal}");
     }
 }
 
@@ -175,7 +167,7 @@ fn lemma_i06_no_overflow_on_max_safe_principal() {
     );
     let interest = result.unwrap();
     let expected = principal / 20; // 5% of principal
-    // Allow ±1 for integer division rounding
+                                   // Allow ±1 for integer division rounding
     assert!(
         (interest - expected).abs() <= 1,
         "I-06: interest={interest} deviates from expected={expected}"
@@ -198,8 +190,7 @@ fn lemma_i07_annual_interest_bounded_by_5pct() {
         i128::MAX / INTEREST_RATE_PER_YEAR / SECONDS_PER_YEAR, // max safe for 1 year
     ];
     for &p in test_principals {
-        let interest = reference_interest(p, SECONDS_PER_YEAR)
-            .expect("I-07: overflow");
+        let interest = reference_interest(p, SECONDS_PER_YEAR).expect("I-07: overflow");
         // 5% of principal, allow +1 for rounding
         let max_allowed = p / 20 + 1;
         assert!(
@@ -235,7 +226,9 @@ fn lemma_i08_stability_fee_is_non_negative_increment() {
         stability_fee >= 0,
         "I-08: stability fee is negative: {stability_fee}"
     );
-    let total = base.checked_add(stability_fee).expect("I-08: total overflow");
+    let total = base
+        .checked_add(stability_fee)
+        .expect("I-08: total overflow");
     assert!(
         total >= base,
         "I-08: total interest with stability fee < base interest"
