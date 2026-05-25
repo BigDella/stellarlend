@@ -5,7 +5,9 @@ mod borrow;
 mod deposit;
 mod events;
 mod flash_loan;
+mod interest_rate;
 mod pause;
+mod risk_monitor;
 mod token_receiver;
 mod withdraw;
 
@@ -25,7 +27,8 @@ use flash_loan::{
     flash_loan as flash_loan_logic, set_flash_loan_fee_bps as set_flash_loan_fee_logic,
     FlashLoanError,
 };
-use pause::{is_paused, set_pause as set_pause_logic, PauseType};
+pub use pause::PauseType;
+use pause::{is_paused, set_pause as set_pause_logic};
 use token_receiver::receive as receive_logic;
 
 mod views;

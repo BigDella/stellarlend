@@ -11,7 +11,7 @@ bash "$ROOT_DIR/scripts/fuzz/check_corpus.sh"
 
 cd "$ROOT_DIR/stellar-lend"
 
-targets=(lending_actions amm_actions bridge_actions)
+targets=(lending_critical lending_actions amm_actions bridge_actions)
 
 for t in "${targets[@]}"; do
   echo "Running fuzz smoke: $t (runs=$RUNS timeout=${TIMEOUT}s)"
