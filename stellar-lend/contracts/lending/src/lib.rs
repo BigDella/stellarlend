@@ -65,10 +65,21 @@ pub mod lazy;
 pub mod liquidation;
 pub mod storage;
 
+// Security & performance suite (issues #635–#638)
+pub mod rate_guard;
+pub mod sandwich_protection;
+pub mod simulation_cache;
+pub mod batch_view;
+
 use interest::InterestCacheError;
 use lazy::{LazyError, LazyField};
 use liquidation::{LiquidationError, LiquidationPlan, PositionSnapshot};
 use storage::{PackError, PoolConfig};
+
+use rate_guard::{RateGuardConfig, RateGuardError, RateManipulationAttempt, RateTwap};
+use sandwich_protection::{ProtectionLevel, SandwichConfig, SandwichDetection, SandwichError};
+use simulation_cache::{SimCacheConfig, SimCacheError, SimCacheStats, SimulationResult};
+use batch_view::{BatchHealthResult, BatchHealthSummary, BatchPositionQuery, BatchViewError};
 
 use insurance::{
     cancel_claim as insurance_cancel_claim, collect_premium as insurance_collect_premium,
@@ -754,5 +765,258 @@ impl LendingContract {
 
     pub fn query_admin(env: Env) -> Option<Address> {
         query::query_admin(&env)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Rate manipulation guard (issue #638)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Configure rate manipulation thresholds (admin only).
+    pub fn set_rate_guard_config(
+        env: Env,
+        admin: Address,
+        config: RateGuardConfig,
+    ) -> Result<RateGuardConfig, RateGuardError> {
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .map_err(|_| RateGuardError::Overflow)?;
+        rate_guard::set_config(&env, admin, config)
+    }
+
+    /// Get current rate guard configuration.
+    pub fn get_rate_guard_config(env: Env) -> RateGuardConfig {
+        rate_guard::get_config(&env)
+    }
+
+    /// Get the rate TWAP accumulator.
+    pub fn get_rate_twap(env: Env) -> RateTwap {
+        rate_guard::get_twap(&env)
+    }
+
+    /// Get rate manipulation attempt log.
+    pub fn get_rate_manipulation_log(env: Env) -> Vec<RateManipulationAttempt> {
+        rate_guard::get_attempt_log(&env)
+    }
+
+    /// Check whether a rate would be accepted (dry run, no state change).
+    pub fn check_rate(
+        env: Env,
+        new_rate_bps: i128,
+    ) -> Result<(i128, bool, bool), RateGuardError> {
+        let _guard = ReentrancyGuard::new_read_only(&env);
+        rate_guard::check_rate(&env, new_rate_bps)
+    }
+
+    /// Whitelist or remove a known aggregator (admin only).
+    pub fn set_whitelisted_aggregator(
+        env: Env,
+        admin: Address,
+        address: Address,
+        whitelisted: bool,
+    ) -> Result<(), RateGuardError> {
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .map_err(|_| RateGuardError::Overflow)?;
+        rate_guard::set_whitelisted_aggregator(&env, admin, address, whitelisted)
+    }
+
+    /// Check if an address is a whitelisted aggregator.
+    pub fn is_whitelisted_aggregator(env: Env, address: Address) -> bool {
+        rate_guard::is_whitelisted_aggregator(&env, &address)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Sandwich attack protection (issue #637)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Configure sandwich protection parameters (admin only).
+    pub fn set_sandwich_config(
+        env: Env,
+        admin: Address,
+        config: SandwichConfig,
+    ) -> Result<SandwichConfig, SandwichError> {
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .map_err(|_| SandwichError::Overflow)?;
+        sandwich_protection::set_config(&env, admin, config)
+    }
+
+    /// Get current sandwich protection configuration.
+    pub fn get_sandwich_config(env: Env) -> SandwichConfig {
+        sandwich_protection::get_config(&env)
+    }
+
+    /// Set user's protection level (none, basic, max).
+    pub fn set_user_sandwich_protection(
+        env: Env,
+        user: Address,
+        level: ProtectionLevel,
+    ) -> Result<(), SandwichError> {
+        sandwich_protection::set_user_protection(&env, user, level)
+    }
+
+    /// Get user's protection level.
+    pub fn get_user_sandwich_protection(env: Env, user: Address) -> ProtectionLevel {
+        sandwich_protection::get_user_protection(&env, &user)
+    }
+
+    /// Commit a transaction for commit-reveal protection (Max level).
+    pub fn commit_sandwich_transaction(
+        env: Env,
+        user: Address,
+        asset: Address,
+        amount: i128,
+        operation_type: u32,
+    ) -> Result<soroban_sdk::Hash, SandwichError> {
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .map_err(|_| SandwichError::Overflow)?;
+        sandwich_protection::commit_transaction(&env, user, asset, amount, operation_type)
+    }
+
+    /// Reveal and execute a committed transaction (Max level).
+    pub fn reveal_sandwich_transaction(
+        env: Env,
+        user: Address,
+        commit_hash: soroban_sdk::Hash,
+        nonce: u64,
+    ) -> Result<(), SandwichError> {
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .map_err(|_| SandwichError::Overflow)?;
+        sandwich_protection::reveal_transaction(&env, user, commit_hash, nonce)
+    }
+
+    /// Submit a transaction to the pending batch for randomized ordering.
+    pub fn submit_sandwich_pending_tx(
+        env: Env,
+        user: Address,
+        operation_type: u32,
+        asset: Address,
+        amount: i128,
+        protection_level: ProtectionLevel,
+    ) -> Result<u32, SandwichError> {
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .map_err(|_| SandwichError::Overflow)?;
+        sandwich_protection::submit_pending_transaction(
+            &env, user, operation_type, asset, amount, protection_level,
+        )
+    }
+
+    /// Get randomized execution order for current block's pending transactions.
+    pub fn get_sandwich_execution_order(env: Env) -> Vec<u32> {
+        sandwich_protection::get_execution_order(&env)
+    }
+
+    /// Clear pending transactions after batch execution.
+    pub fn clear_sandwich_pending_txs(env: Env) {
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .unwrap();
+        sandwich_protection::clear_pending_transactions(&env)
+    }
+
+    /// Get sandwich detection log.
+    pub fn get_sandwich_detection_log(env: Env) -> Vec<SandwichDetection> {
+        sandwich_protection::get_detection_log(&env)
+    }
+
+    /// Calculate premium fee for sandwich reversal protection.
+    pub fn calculate_sandwich_premium_fee(env: Env, amount: i128) -> i128 {
+        sandwich_protection::calculate_premium_fee(&env, amount)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Transaction simulation cache (issue #636)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Configure simulation cache (admin only).
+    pub fn set_sim_cache_config(env: Env, config: SimCacheConfig) {
+        simulation_cache::set_config(&env, config)
+    }
+
+    /// Get simulation cache configuration.
+    pub fn get_sim_cache_config(env: Env) -> SimCacheConfig {
+        simulation_cache::get_config(&env)
+    }
+
+    /// Look up a cached simulation result.
+    pub fn sim_cache_lookup(
+        env: Env,
+        operation_type: u32,
+        pool: Address,
+        user: Address,
+        asset: Address,
+        amount: i128,
+    ) -> Option<SimulationResult> {
+        let _guard = ReentrancyGuard::new_read_only(&env);
+        simulation_cache::cache_lookup(&env, operation_type, &pool, &user, &asset, amount)
+    }
+
+    /// Insert a simulation result into the cache.
+    pub fn sim_cache_insert(
+        env: Env,
+        operation_type: u32,
+        pool: Address,
+        user: Address,
+        asset: Address,
+        amount: i128,
+        health_after: i128,
+        collateral_value_after: i128,
+        debt_value_after: i128,
+        would_succeed: bool,
+    ) -> Result<(), SimCacheError> {
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .map_err(|_| SimCacheError::Overflow)?;
+        simulation_cache::cache_insert(
+            &env, operation_type, &pool, &user, &asset, amount,
+            health_after, collateral_value_after, debt_value_after, would_succeed,
+        )
+    }
+
+    /// Clear the simulation cache.
+    pub fn sim_cache_clear(env: Env) {
+        simulation_cache::cache_clear(&env)
+    }
+
+    /// Get simulation cache statistics.
+    pub fn get_sim_cache_stats(env: Env) -> SimCacheStats {
+        simulation_cache::get_stats(&env)
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Batched multi-pool health check (issue #635)
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Batch health check across multiple pool positions in a single call.
+    pub fn batch_health_check(
+        env: Env,
+        queries: Vec<BatchPositionQuery>,
+    ) -> Result<BatchHealthSummary, BatchViewError> {
+        let _guard = ReentrancyGuard::new_read_only(&env);
+        batch_view::batch_health_check(&env, &queries)
+    }
+
+    /// Paginated batch health check for large query sets (100+ positions).
+    pub fn batch_health_check_paged(
+        env: Env,
+        queries: Vec<BatchPositionQuery>,
+        offset: u32,
+        limit: u32,
+    ) -> Result<BatchHealthSummary, BatchViewError> {
+        let _guard = ReentrancyGuard::new_read_only(&env);
+        batch_view::batch_health_check_paged(&env, &queries, offset, limit)
+    }
+
+    /// Get total collateral and debt values across queried positions.
+    pub fn batch_total_value(
+        env: Env,
+        queries: Vec<BatchPositionQuery>,
+    ) -> Result<(i128, i128), BatchViewError> {
+        let _guard = ReentrancyGuard::new_read_only(&env);
+        batch_view::batch_total_value(&env, &queries)
+    }
+
+    /// Get only liquidatable positions from a batch query.
+    pub fn batch_liquidatable_positions(
+        env: Env,
+        queries: Vec<BatchPositionQuery>,
+    ) -> Result<Vec<BatchHealthResult>, BatchViewError> {
+        let _guard = ReentrancyGuard::new_read_only(&env);
+        batch_view::batch_liquidatable_positions(&env, &queries)
     }
 }

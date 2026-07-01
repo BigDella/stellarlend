@@ -2834,6 +2834,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarlend-compliance"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellarlend-copy-lending"
 version = "0.1.0"
 dependencies = [
@@ -2971,6 +2978,14 @@ name = "stellarlend-swap-router"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+]
+
+[[package]]
+name = "stellarlend-token-adapter"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "soroban-token-sdk",
 ]
 
 [[package]]

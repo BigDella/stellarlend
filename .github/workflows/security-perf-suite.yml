@@ -1,0 +1,141 @@
+name: Security & Performance Suite (Issues #635–#638)
+
+on:
+  push:
+    branches: ["main", "dev"]
+    paths:
+      - "stellar-lend/contracts/lending/src/rate_guard.rs"
+      - "stellar-lend/contracts/lending/src/sandwich_protection.rs"
+      - "stellar-lend/contracts/lending/src/simulation_cache.rs"
+      - "stellar-lend/contracts/lending/src/batch_view.rs"
+      - "frontend/src/components/RateManipulationDashboard.tsx"
+      - "frontend/src/components/SandwichProtectionUI.tsx"
+      - "frontend/src/components/BatchHealthCheck.tsx"
+      - "frontend/src/components/SimulationCacheDashboard.tsx"
+      - "api/src/routes/rateGuard.routes.ts"
+      - "api/src/routes/sandwich.routes.ts"
+      - "api/src/routes/simCache.routes.ts"
+      - "api/src/routes/batchHealth.routes.ts"
+  pull_request:
+    branches: ["main", "dev"]
+    paths:
+      - "stellar-lend/contracts/lending/src/rate_guard.rs"
+      - "stellar-lend/contracts/lending/src/sandwich_protection.rs"
+      - "stellar-lend/contracts/lending/src/simulation_cache.rs"
+      - "stellar-lend/contracts/lending/src/batch_view.rs"
+      - "frontend/src/components/RateManipulationDashboard.tsx"
+      - "frontend/src/components/SandwichProtectionUI.tsx"
+      - "frontend/src/components/BatchHealthCheck.tsx"
+      - "frontend/src/components/SimulationCacheDashboard.tsx"
+      - "api/src/routes/rateGuard.routes.ts"
+      - "api/src/routes/sandwich.routes.ts"
+      - "api/src/routes/simCache.routes.ts"
+      - "api/src/routes/batchHealth.routes.ts"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts-security-perf:
+    name: Contracts — Security & Performance Suite Tests
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - name: Configure sccache
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('stellar-lend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting (security & perf modules)
+        run: |
+          cd stellar-lend
+          cargo fmt --all -- --check
+
+      - name: Run clippy (security & perf modules)
+        run: |
+          cd stellar-lend
+          cargo clippy --package stellarlend-lending --all-targets --all-features -- -D warnings
+
+      - name: Build lending contract
+        run: |
+          cd stellar-lend
+          cargo build --package stellarlend-lending --verbose
+
+      - name: Run lending contract tests
+        run: |
+          cd stellar-lend
+          cargo test --package stellarlend-lending --verbose
+
+      - name: Run rate_guard unit tests
+        run: |
+          cd stellar-lend
+          cargo test --package stellarlend-lending rate_guard -- --nocapture
+
+      - name: Run sandwich_protection unit tests
+        run: |
+          cd stellar-lend
+          cargo test --package stellarlend-lending sandwich_protection -- --nocapture
+
+      - name: Run simulation_cache unit tests
+        run: |
+          cd stellar-lend
+          cargo test --package stellarlend-lending simulation_cache -- --nocapture
+
+      - name: Run batch_view unit tests
+        run: |
+          cd stellar-lend
+          cargo test --package stellarlend-lending batch_view -- --nocapture
+
+  api-security-perf:
+    name: API — Security & Performance Routes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (includes new route files)
+        run: npm run lint
+
+      - name: Format check (includes new route files)
+        run: npx prettier --check "src/**/*.ts"
+
+      - name: Type check (includes new route files)
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        run: npm test
