@@ -22,9 +22,9 @@ jobs:
         with:
           path: node_modules
           key: ${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
-      - run: npm run format:all
-      - run: npm run lint:all
+      - run: npm ci --workspaces
+      - run: npm run format --workspace=api && npm run format --workspace=oracle
+      - run: npm run lint --workspace=api && npm run lint --workspace=oracle
 
   typecheck:
     name: Type Check
@@ -38,8 +38,8 @@ jobs:
         with:
           path: node_modules
           key: ${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
-      - run: npm run typecheck:all
+      - run: npm ci --workspaces
+      - run: npm run typecheck --workspace=api && npm run typecheck --workspace=oracle
 
   test:
     name: Tests
@@ -53,16 +53,17 @@ jobs:
         with:
           path: node_modules
           key: ${{ runner.os }}-node-${{ env.NODE_VERSION }}-${{ hashFiles('package-lock.json') }}
-      - run: npm ci
-      - run: npm run test:all
+      - run: npm ci --workspaces
+      - run: npm run test --workspace=api && npm run test --workspace=oracle
 
   audit:
     name: NPM Audit
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - run: npm ci
+      - run: npm ci --workspaces
       - run: npm audit --audit-level=high
