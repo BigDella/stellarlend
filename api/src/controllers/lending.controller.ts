@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { StellarService } from '@/services/stellar.service';
+import { StellarService } from '../services/stellar.service';
 import {
   LendingOperation,
   PrepareResponse,
@@ -9,21 +9,21 @@ import {
   ProtocolStatsResponse,
   TransactionHistoryQuery,
   TransactionHistoryResponse,
-} from '@/types';
-import { config } from '@/config';
-import logger from '@/utils/logger';
-import { emergencyPauseService } from '@/services/emergencyPause.service';
-import { redisCacheService } from '@/services/redisCache.service';
-import { auditLogService } from '@/services/auditLog.service';
-import { parsePaginationParams } from '@/utils/pagination';
-import { requestCoalescingService } from '@/services/requestCoalescing.service';
+} from '../types/index';
+import { config } from '../config/index';
+import logger from '../utils/logger';
+import { emergencyPauseService } from '../services/emergencyPause.service';
+import { redisCacheService } from '../services/redisCache.service';
+import { auditLogService } from '../services/auditLog.service';
+import { parsePaginationParams } from '../utils/pagination';
+import { requestCoalescingService } from '../services/requestCoalescing.service';
 import {
   assignRole,
   getCurrentRoleAssignments,
   getRbacAuditContext,
   scheduleRevocation,
   type Role,
-} from '@/middleware/rbac';
+} from '../middleware/rbac';
 
 function mapHealthResponse(services: { horizon: boolean; sorobanRpc: boolean }) {
   const isHealthy = services.horizon && services.sorobanRpc;
@@ -65,6 +65,7 @@ export const prepare = async (req: Request, res: Response, next: NextFunction) =
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -98,6 +99,7 @@ export const relayDelegated = async (req: Request, res: Response, next: NextFunc
     return res.status(result.success ? 200 : 400).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -154,6 +156,7 @@ export const submit = async (req: Request, res: Response, next: NextFunction) =>
   } catch (error) {
     emergencyPauseService.recordFailure();
     next(error);
+    return;
   }
 };
 
@@ -260,6 +263,7 @@ export const healthCheck = async (req: Request, res: Response, next: NextFunctio
     });
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -280,6 +284,7 @@ export const readinessCheck = async (_req: Request, res: Response, next: NextFun
     });
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -293,6 +298,7 @@ export const coalescingMetrics = async (_req: Request, res: Response, next: Next
     });
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -309,6 +315,7 @@ export const protocolStats = async (_req: Request, res: Response, next: NextFunc
     return res.status(200).json(stats);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -317,7 +324,7 @@ export const getTransactionHistory = async (req: Request, res: Response, next: N
     const stellarService = new StellarService();
     const pagination = parsePaginationParams(req.query as Record<string, unknown>);
     const query: TransactionHistoryQuery = {
-      userAddress: req.params.userAddress,
+      userAddress: req.params!.userAddress,
       limit: pagination.limit,
       cursor: pagination.cursor ?? undefined,
     };
@@ -326,6 +333,7 @@ export const getTransactionHistory = async (req: Request, res: Response, next: N
     return res.status(200).json(history);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -343,7 +351,7 @@ export const streamTransactionHistory = async (req: Request, res: Response, next
   try {
     const stellarService = new StellarService();
     const stream = stellarService.streamTransactionHistory(
-      req.params.userAddress,
+      req.params!.userAddress,
       pageSize,
       abort.signal
     );
@@ -359,6 +367,7 @@ export const streamTransactionHistory = async (req: Request, res: Response, next
   } catch (error) {
     if (!res.headersSent) {
       next(error);
+      return;
     } else {
       res.write(JSON.stringify({ error: 'Stream interrupted' }) + '\n');
       res.end();
@@ -402,7 +411,7 @@ export const verifyAuditLogIntegrity = (_req: Request, res: Response) => {
  */
 export const getLiquidationPrice = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { asset } = req.params;
+    const { asset } = req.params!;
 
     if (!asset) {
       return res.status(400).json({
@@ -424,6 +433,7 @@ export const getLiquidationPrice = async (req: Request, res: Response, next: Nex
     });
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -468,6 +478,7 @@ export const configureRebalancing = async (req: Request, res: Response, next: Ne
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -500,6 +511,7 @@ export const executeRebalancing = async (req: Request, res: Response, next: Next
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -532,6 +544,7 @@ export const getRebalancingConfig = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -566,6 +579,7 @@ export const mintDebtToken = async (req: Request, res: Response, next: NextFunct
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -598,6 +612,7 @@ export const transferDebtToken = async (req: Request, res: Response, next: NextF
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -630,6 +645,7 @@ export const burnDebtToken = async (req: Request, res: Response, next: NextFunct
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -662,6 +678,7 @@ export const getDebtPosition = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -689,6 +706,7 @@ export const getUserDebtTokens = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -713,6 +731,7 @@ export const getDebtTokenTotalSupply = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -740,6 +759,7 @@ export const setDebtTokenTransferPause = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -767,5 +787,6 @@ export const setDebtTokenAddressBlocked = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };

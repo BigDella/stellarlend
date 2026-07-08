@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { complianceController } from '@/controllers/compliance.controller';
+import { complianceController } from '../../../controllers/compliance.controller';
 
 const router = Router();
 

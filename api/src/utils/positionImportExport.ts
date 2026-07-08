@@ -71,7 +71,8 @@ function parseCsvRows(csv: string, columnMapping?: Record<string, string>): RawI
     return [];
   }
 
-  const headers = parseCsvLine(lines[0]);
+  const firstLine = lines[0]!;
+  const headers = parseCsvLine(firstLine);
 
   return lines.slice(1).map((line) => {
     const values = parseCsvLine(line);
@@ -303,9 +304,9 @@ export function preparePositionImport(
 
 export function exportPositions(
   positions: Position[],
-  options: PositionExportOptions = {}
+  options: Partial<PositionExportOptions> = {}
 ): PositionExportData {
-  const { format = 'json', includeZeroBalances = false, userAddresses, assetAddress } = options;
+  const { format = 'json', includeZeroBalances = false, userAddresses, assetAddress } = options as PositionExportOptions;
 
   let filtered = positions;
 

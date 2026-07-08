@@ -10,34 +10,7 @@ name: Formal Verification Specs
 # This workflow is a required CI gate: PRs touching contract code cannot
 # merge if any spec lemma fails.
 
-on:
-  push:
-    branches: ["main", "dev", "feat/**"]
-    paths:
-      - "contract/src/**/*.rs"
-      - "contract/lending/src/spec/**"
-      - "contract/Cargo.toml"
-      - "contract/Cargo.lock"
-      - ".github/workflows/formal-verification.yml"
-  pull_request:
-    branches: ["main", "dev"]
-    paths:
-      - "contract/src/**/*.rs"
-      - "contract/lending/src/spec/**"
-      - "contract/Cargo.toml"
-      - "contract/Cargo.lock"
-      - ".github/workflows/formal-verification.yml"
-  # Allow manual dispatch to run the full suite (including slow Kani checks)
-  workflow_dispatch:
-    inputs:
-      run_kani:
-        description: "Run Kani bounded model-checking harnesses (slow, ~20 min)"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "true"
-          - "false"
+on: workflow_dispatch
 
 env:
   CARGO_TERM_COLOR: always

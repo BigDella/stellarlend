@@ -183,7 +183,7 @@ export const snsService = {
     logger.info('SNS cache cleared');
   },
 
-  private updateMetrics(name: string): void {
+  updateMetrics(name: string): void {
     const current = resolutionMetrics.get(name) ?? 0;
     resolutionMetrics.set(name, current + 1);
   },

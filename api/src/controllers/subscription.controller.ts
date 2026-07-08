@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from 'express';
-import { ValidationError } from '@/utils/errors';
-import { SubscriptionService } from '@/services/subscription.service';
-import { CreateRecurringSubscriptionRequest, UpdateRecurringSubscriptionRequest } from '@/types';
+import { ValidationError } from '../utils/errors';
+import { SubscriptionService } from '../services/subscription.service';
+import type { CreateRecurringSubscriptionRequest, UpdateRecurringSubscriptionRequest } from '../types';
 
 const subscriptionService = new SubscriptionService();
 
@@ -26,7 +26,7 @@ export const createSubscription = (req: Request, res: Response, next: NextFuncti
 export const getSubscription = (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress, subscriptionId } = req.params;
-    const subscription = subscriptionService.getSubscription(userAddress, subscriptionId);
+    const subscription = subscriptionService.getSubscription(userAddress!, subscriptionId!);
     if (!subscription) {
       res.status(404).json({ success: false, error: 'Subscription not found' });
       return;
@@ -43,7 +43,7 @@ export const listSubscriptions = (req: Request, res: Response, next: NextFunctio
     const status = req.query.status as string | undefined;
     const action = req.query.action as string | undefined;
     const subscriptions = subscriptionService.listSubscriptions(
-      userAddress,
+      userAddress!,
       status as any,
       action as any
     );
@@ -57,7 +57,7 @@ export const updateSubscription = (req: Request, res: Response, next: NextFuncti
   try {
     const { userAddress, subscriptionId } = req.params;
     const body = req.body as UpdateRecurringSubscriptionRequest;
-    const subscription = subscriptionService.updateSubscription(userAddress, subscriptionId, body);
+    const subscription = subscriptionService.updateSubscription(userAddress!, subscriptionId!, body);
     res.status(200).json({ success: true, subscription });
   } catch (error) {
     next(error);
@@ -67,7 +67,7 @@ export const updateSubscription = (req: Request, res: Response, next: NextFuncti
 export const pauseSubscription = (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress, subscriptionId } = req.params;
-    const subscription = subscriptionService.pauseSubscription(userAddress, subscriptionId);
+    const subscription = subscriptionService.pauseSubscription(userAddress!, subscriptionId!);
     res.status(200).json({ success: true, subscription });
   } catch (error) {
     next(error);
@@ -77,7 +77,7 @@ export const pauseSubscription = (req: Request, res: Response, next: NextFunctio
 export const resumeSubscription = (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress, subscriptionId } = req.params;
-    const subscription = subscriptionService.resumeSubscription(userAddress, subscriptionId);
+    const subscription = subscriptionService.resumeSubscription(userAddress!, subscriptionId!);
     res.status(200).json({ success: true, subscription });
   } catch (error) {
     next(error);
@@ -87,7 +87,7 @@ export const resumeSubscription = (req: Request, res: Response, next: NextFuncti
 export const cancelSubscription = (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress, subscriptionId } = req.params;
-    const subscription = subscriptionService.cancelSubscription(userAddress, subscriptionId);
+    const subscription = subscriptionService.cancelSubscription(userAddress!, subscriptionId!);
     res.status(200).json({ success: true, subscription });
   } catch (error) {
     next(error);
@@ -97,7 +97,7 @@ export const cancelSubscription = (req: Request, res: Response, next: NextFuncti
 export const getExecutionHistory = (req: Request, res: Response, next: NextFunction) => {
   try {
     const { subscriptionId } = req.params;
-    const history = subscriptionService.getExecutionHistory(subscriptionId);
+    const history = subscriptionService.getExecutionHistory(subscriptionId!);
     res.status(200).json({ success: true, executionHistory: history, count: history.length });
   } catch (error) {
     next(error);
@@ -107,7 +107,7 @@ export const getExecutionHistory = (req: Request, res: Response, next: NextFunct
 export const getSubscriptionAnalytics = (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress } = req.params;
-    const analytics = subscriptionService.getSubscriptionAnalytics(userAddress);
+    const analytics = subscriptionService.getSubscriptionAnalytics(userAddress!);
     res.status(200).json({ success: true, analytics });
   } catch (error) {
     next(error);
@@ -117,7 +117,7 @@ export const getSubscriptionAnalytics = (req: Request, res: Response, next: Next
 export const triggerManualExecution = (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress, subscriptionId } = req.params;
-    const result = subscriptionService.triggerManualExecution(subscriptionId, userAddress);
+    const result = subscriptionService.triggerManualExecution(subscriptionId!, userAddress!);
     res.status(200).json({ success: true, execution: result });
   } catch (error) {
     next(error);
@@ -168,7 +168,7 @@ export const importSubscriptionsRequest = (req: Request, res: Response, next: Ne
 
 export const exportSubscriptionsRequest = (req: Request, res: Response, next: NextFunction) => {
   try {
-    const result = subscriptionService.exportSubscriptions(req.params.merchantId);
+    const result = subscriptionService.exportSubscriptions(req.params.merchantId!);
     res.status(200).json(result);
   } catch (error) {
     next(error);
@@ -177,7 +177,7 @@ export const exportSubscriptionsRequest = (req: Request, res: Response, next: Ne
 
 export const getImportHistoryRequest = (req: Request, res: Response, next: NextFunction) => {
   try {
-    const history = subscriptionService.getImportHistory(req.params.merchantId);
+    const history = subscriptionService.getImportHistory(req.params.merchantId!);
     res.status(200).json({ merchantId: req.params.merchantId, history });
   } catch (error) {
     next(error);

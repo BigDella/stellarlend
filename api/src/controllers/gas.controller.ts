@@ -54,7 +54,7 @@ export class GasController {
    */
   async getHistoricalData(req: Request, res: Response): Promise<void> {
     try {
-      const { operation } = req.params;
+      const { operation } = req.params!;
       const period = (req.query.period as string) || '30d';
 
       const validOperations = ['deposit', 'withdraw', 'borrow', 'repay', 'liquidation', 'flash_loan'];
@@ -83,7 +83,7 @@ export class GasController {
    */
   async getChartData(req: Request, res: Response): Promise<void> {
     try {
-      const { operation } = req.params;
+      const { operation } = req.params!;
       const period = (req.query.period as string) || '7d';
 
       const validOperations = ['deposit', 'withdraw', 'borrow', 'repay', 'liquidation', 'flash_loan'];
@@ -244,7 +244,7 @@ export class GasController {
    */
   async getTimingRecommendation(req: Request, res: Response): Promise<void> {
     try {
-      const { operation } = req.params;
+      const { operation } = req.params!;
 
       const validOperations = ['deposit', 'withdraw', 'borrow', 'repay', 'liquidation', 'flash_loan'];
       if (!validOperations.includes(operation)) {

@@ -7,7 +7,7 @@ import {
   getAnalyticsSummary,
   exportAnalytics,
 } from '../services/analytics.service';
-import { AnalyticsQuery } from '@/types/analytics';
+import { AnalyticsQuery } from '../types/analytics';
 
 export const historicalRates = async (
   req: Request,
@@ -24,6 +24,7 @@ export const historicalRates = async (
     res.status(200).json(rates);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -41,6 +42,7 @@ export const poolUtilization = async (
     res.status(200).json(utilization);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -54,6 +56,7 @@ export const rateComparison = async (
     res.status(200).json(comparisons);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -70,6 +73,7 @@ export const protocolRevenue = async (
     res.status(200).json(revenue);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -83,6 +87,7 @@ export const analyticsSummary = async (
     res.status(200).json(summary);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -118,5 +123,6 @@ export const analyticsExport = async (
     res.status(200).json(data);
   } catch (error) {
     next(error);
+    return;
   }
 };

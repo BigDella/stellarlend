@@ -15,9 +15,9 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { mevService, SensitiveOperation, TxOrderingHint } from '@/services/mev.service';
-import { ValidationError } from '@/utils/errors';
-import logger from '@/utils/logger';
+import { mevService, SensitiveOperation, TxOrderingHint } from '../services/mev.service';
+import { ValidationError } from '../utils/errors';
+import logger from '../utils/logger';
 
 // ─── Commit ───────────────────────────────────────────────────────────────────
 
@@ -71,6 +71,7 @@ export const buildCommit = async (
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -99,6 +100,7 @@ export const buildReveal = async (
     res.status(200).json({ success: true, data: { unsignedXdr, commitId, operation } });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -139,6 +141,7 @@ export const buildAuctionBid = async (
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -164,6 +167,7 @@ export const buildSettleAuction = async (
     res.status(200).json({ success: true, data: { unsignedXdr, slotId } });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -173,7 +177,7 @@ export const getAuctionResult = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const { slotId } = req.params;
+    const { slotId } = req.params!;
     const result = await mevService.getAuctionResult(slotId);
 
     if (!result) {
@@ -184,6 +188,7 @@ export const getAuctionResult = async (
     res.status(200).json({ success: true, data: result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -197,6 +202,7 @@ export const getCurrentAuctionSlot = async (
     res.status(200).json({ success: true, data: { currentSlotId: slotId.toString() } });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -212,6 +218,7 @@ export const getDashboard = async (
     res.status(200).json({ success: true, data });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -238,6 +245,7 @@ export const getGasBidAnalysis = async (
     res.status(200).json({ success: true, data: analysis });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -265,6 +273,7 @@ export const getPrivateMempoolRoute = async (
     res.status(200).json({ success: true, data: route });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -300,5 +309,6 @@ export const getFeePreview = async (
     });
   } catch (err) {
     next(err);
+    return;
   }
 };

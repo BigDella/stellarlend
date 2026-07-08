@@ -1,11 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
-import { StellarService } from '@/services/stellar.service';
-import { config } from '@/config';
-import logger from '@/utils/logger';
-import { emergencyPauseService } from '@/services/emergencyPause.service';
-import { redisCacheService } from '@/services/redisCache.service';
-import { auditLogService } from '@/services/auditLog.service';
-import { parsePaginationParams } from '@/utils/pagination';
+import { StellarService } from '../services/stellar.service';
+import { config } from '../config/index';
+import logger from '../utils/logger';
+import { emergencyPauseService } from '../services/emergencyPause.service';
+import { redisCacheService } from '../services/redisCache.service';
+import { auditLogService } from '../services/auditLog.service';
+import { parsePaginationParams } from '../utils/pagination';
 
 // Cross-Asset Lending Controller
 // Handles cross-asset lending operations including multi-collateral borrowing,
@@ -46,6 +46,7 @@ export const getCrossAssetPositionSummary = async (req: Request, res: Response, 
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -80,6 +81,7 @@ export const depositCrossAsset = async (req: Request, res: Response, next: NextF
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -114,6 +116,7 @@ export const borrowCrossAsset = async (req: Request, res: Response, next: NextFu
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -148,6 +151,7 @@ export const withdrawCrossAsset = async (req: Request, res: Response, next: Next
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -185,5 +189,6 @@ export const liquidateCrossAsset = async (req: Request, res: Response, next: Nex
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };

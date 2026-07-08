@@ -1,9 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
-import logger from '@/utils/logger';
+import logger from '../utils/logger';
 import { auditLogService } from './auditLog.service';
-import { UnauthorizedError, ConflictError, NotFoundError } from '@/utils/errors';
+import { UnauthorizedError, ConflictError, NotFoundError } from '../utils/errors';
 
 /**
  * Issue #387 – Secure API Key Hashing and Storage

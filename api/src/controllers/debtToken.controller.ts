@@ -1,10 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
-import { StellarService } from '@/services/stellar.service';
-import { config } from '@/config';
-import logger from '@/utils/logger';
-import { emergencyPauseService } from '@/services/emergencyPause.service';
-import { redisCacheService } from '@/services/redisCache.service';
-import { auditLogService } from '@/services/auditLog.service';
+import { StellarService } from '../services/stellar.service';
+import { config } from '../config/index';
+import logger from '../utils/logger';
+import { emergencyPauseService } from '../services/emergencyPause.service';
+import { redisCacheService } from '../services/redisCache.service';
+import { auditLogService } from '../services/auditLog.service';
 
 // Debt Token Controller
 // Handles debt token operations including minting, transferring, burning,
@@ -40,6 +40,7 @@ export const mintDebtToken = async (req: Request, res: Response, next: NextFunct
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -72,6 +73,7 @@ export const transferDebtToken = async (req: Request, res: Response, next: NextF
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -104,6 +106,7 @@ export const burnDebtToken = async (req: Request, res: Response, next: NextFunct
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -136,6 +139,7 @@ export const getDebtPosition = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -163,6 +167,7 @@ export const getUserDebtTokens = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -187,6 +192,7 @@ export const getDebtTokenTotalSupply = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -217,6 +223,7 @@ export const setDebtTokenTransferPause = async (req: Request, res: Response, nex
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -247,5 +254,6 @@ export const setDebtTokenAddressBlocked = async (req: Request, res: Response, ne
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };

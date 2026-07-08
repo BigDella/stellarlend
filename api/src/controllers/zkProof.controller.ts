@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { zkProofService } from '@/services/zkProof.service';
+import { zkProofService } from '../services/zkProof.service';
 import type {
   CommitRequest,
   RangeProofRequest,
@@ -14,6 +14,7 @@ export const commit = async (req: Request, res: Response, next: NextFunction) =>
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -24,6 +25,7 @@ export const rangeProof = async (req: Request, res: Response, next: NextFunction
     return res.status(200).json({ success: true, proof });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -34,6 +36,7 @@ export const verifyRange = async (req: Request, res: Response, next: NextFunctio
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -44,5 +47,6 @@ export const transferProof = async (req: Request, res: Response, next: NextFunct
     return res.status(200).json({ success: true, proof });
   } catch (err) {
     next(err);
+    return;
   }
 };

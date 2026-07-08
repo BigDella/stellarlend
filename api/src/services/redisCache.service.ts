@@ -2,7 +2,7 @@ import Redis from 'ioredis';
 import { config } from '../config';
 import logger from '../utils/logger';
 
-export type HotCacheKeyKind = 'price' | 'position' | 'pool' | 'protocol';
+export type HotCacheKeyKind = 'price' | 'position' | 'pool' | 'protocol' | 'gas' | 'mev' | 'nonce';
 
 interface CacheMetrics {
   hits: number;

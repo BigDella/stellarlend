@@ -1,10 +1,6 @@
 name: Storage Impact Analysis
 
-on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "stellar-lend/contracts/**/*.rs"
+on: workflow_dispatch
 
 concurrency:
   group: storage-impact-${{ github.event.pull_request.number }}

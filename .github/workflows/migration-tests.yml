@@ -1,28 +1,6 @@
 name: Migration Tests
 
-on:
-  push:
-    branches: ["main", "dev"]
-    paths:
-      - "stellar-lend/contracts/lending/src/data_store.rs"
-      - "stellar-lend/contracts/lending/src/upgrade.rs"
-      - "stellar-lend/contracts/common/src/upgrade.rs"
-      - "stellar-lend/contracts/migration-hub/**"
-      - "scripts/state-migrate/**"
-      - "stellar-lend/tests/migration/**"
-      - ".github/workflows/migration-tests.yml"
-  pull_request:
-    branches: ["main", "dev"]
-    paths:
-      - "stellar-lend/contracts/lending/src/data_store.rs"
-      - "stellar-lend/contracts/lending/src/upgrade.rs"
-      - "stellar-lend/contracts/common/src/upgrade.rs"
-      - "stellar-lend/contracts/migration-hub/**"
-      - "scripts/state-migrate/**"
-      - "stellar-lend/tests/migration/**"
-      - ".github/workflows/migration-tests.yml"
-  schedule:
-    - cron: "0 6 * * 1"  # Every Monday at 06:00 UTC
+on: workflow_dispatch
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

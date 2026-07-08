@@ -33,10 +33,6 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-const server = app.listen(port, () => {
-  logger.info(`Server running on port ${port}`);
-});
-
 const shutdown = (signal: string) => {
   logger.info(`${signal} received, shutting down gracefully`);
   server.close(() => {

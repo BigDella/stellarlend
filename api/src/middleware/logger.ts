@@ -15,7 +15,8 @@ const redactPII = (obj: Record<string, any>): Record<string, any> => {
 
 const getCorrelationId = (): string => {
   const ns = getNamespace("request");
-  return ns?.get("correlationId") || "no-correlation-id";
+  const id = ns?.get("correlationId");
+  return typeof id === "string" ? id : "no-correlation-id";
 };
 
 export const logger = winston.createLogger({

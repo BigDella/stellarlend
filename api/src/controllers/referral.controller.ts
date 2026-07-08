@@ -9,6 +9,7 @@ export const generateCode = async (req: Request, res: Response, next: NextFuncti
     return res.status(200).json({ success: true, code });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -22,6 +23,7 @@ export const registerReferral = async (req: Request, res: Response, next: NextFu
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -33,6 +35,7 @@ export const getStats = async (req: Request, res: Response, next: NextFunction) 
     return res.status(200).json({ success: true, stats });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -44,6 +47,7 @@ export const claim = async (req: Request, res: Response, next: NextFunction) => 
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -55,5 +59,6 @@ export const getReferralLink = async (req: Request, res: Response, next: NextFun
     return res.status(200).json({ success: true, link });
   } catch (err) {
     next(err);
+    return;
   }
 };

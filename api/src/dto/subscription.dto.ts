@@ -45,10 +45,10 @@ export type SubscriptionAction = (typeof VALID_ACTIONS)[number];
 export type SubscriptionInterval = (typeof VALID_INTERVALS)[number];
 
 export class CreateSubscriptionDto {
-  readonly userAddress: string;
-  readonly action: SubscriptionAction;
-  readonly amount: string;
-  readonly interval: SubscriptionInterval;
+  readonly userAddress!: string;
+  readonly action!: SubscriptionAction;
+  readonly amount!: string;
+  readonly interval!: SubscriptionInterval;
   readonly frequency?: number;
   readonly startDate?: string;
   readonly endDate?: string;

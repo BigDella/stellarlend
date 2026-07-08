@@ -108,7 +108,8 @@ class NonceManager {
       const pendingIdx = state.pendingNonces.findIndex((p) => p.nonce === failedNonce);
 
       if (pendingIdx >= 0) {
-        state.pendingNonces[pendingIdx].status = 'failed';
+        const pending = state.pendingNonces[pendingIdx];
+        if (pending) pending.status = 'failed';
       }
 
       const currentBig = BigInt(state.currentNonce);

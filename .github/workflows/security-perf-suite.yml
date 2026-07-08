@@ -1,36 +1,6 @@
 name: Security & Performance Suite (Issues #635–#638)
 
-on:
-  push:
-    branches: ["main", "dev"]
-    paths:
-      - "stellar-lend/contracts/lending/src/rate_guard.rs"
-      - "stellar-lend/contracts/lending/src/sandwich_protection.rs"
-      - "stellar-lend/contracts/lending/src/simulation_cache.rs"
-      - "stellar-lend/contracts/lending/src/batch_view.rs"
-      - "frontend/src/components/RateManipulationDashboard.tsx"
-      - "frontend/src/components/SandwichProtectionUI.tsx"
-      - "frontend/src/components/BatchHealthCheck.tsx"
-      - "frontend/src/components/SimulationCacheDashboard.tsx"
-      - "api/src/routes/rateGuard.routes.ts"
-      - "api/src/routes/sandwich.routes.ts"
-      - "api/src/routes/simCache.routes.ts"
-      - "api/src/routes/batchHealth.routes.ts"
-  pull_request:
-    branches: ["main", "dev"]
-    paths:
-      - "stellar-lend/contracts/lending/src/rate_guard.rs"
-      - "stellar-lend/contracts/lending/src/sandwich_protection.rs"
-      - "stellar-lend/contracts/lending/src/simulation_cache.rs"
-      - "stellar-lend/contracts/lending/src/batch_view.rs"
-      - "frontend/src/components/RateManipulationDashboard.tsx"
-      - "frontend/src/components/SandwichProtectionUI.tsx"
-      - "frontend/src/components/BatchHealthCheck.tsx"
-      - "frontend/src/components/SimulationCacheDashboard.tsx"
-      - "api/src/routes/rateGuard.routes.ts"
-      - "api/src/routes/sandwich.routes.ts"
-      - "api/src/routes/simCache.routes.ts"
-      - "api/src/routes/batchHealth.routes.ts"
+on: workflow_dispatch
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

@@ -8,6 +8,7 @@ export const getCurrentFees = async (req: Request, res: Response, next: NextFunc
     return res.status(200).json({ success: true, fees });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -18,6 +19,7 @@ export const getFeeHistory = async (req: Request, res: Response, next: NextFunct
     return res.status(200).json({ success: true, history });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -28,5 +30,6 @@ export const computeFee = async (req: Request, res: Response, next: NextFunction
     return res.status(200).json({ success: true, fee });
   } catch (err) {
     next(err);
+    return;
   }
 };

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { complianceService } from '@/services/compliance.service';
+import { complianceService } from '../services/compliance.service';
 
 export class ComplianceController {
   addSanction(req: Request, res: Response) {
@@ -101,12 +101,12 @@ export class ComplianceController {
 
   getSar(req: Request, res: Response) {
     try {
-      const { sarId } = req.params;
+      const { sarId } = req.params!;
       const sar = complianceService.getSar(parseInt(sarId));
       if (!sar) return res.status(404).json({ error: 'SAR not found' });
-      res.json(sar);
+      return res.json(sar);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: err.message });
     }
   }
 
@@ -125,9 +125,9 @@ export class ComplianceController {
       const { from, to } = req.query;
       if (!from || !to) return res.status(400).json({ error: 'from, to required' });
       const report = complianceService.getComplianceReport(from as string, to as string);
-      res.json(report);
+      return res.json(report);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: err.message });
     }
   }
 

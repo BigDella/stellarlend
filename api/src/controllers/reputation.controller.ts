@@ -19,6 +19,7 @@ export const getReputation = async (req: Request, res: Response, next: NextFunct
     return res.status(200).json({ success: true, reputation });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -74,6 +75,7 @@ export const getReputationTiers = async (_req: Request, res: Response, next: Nex
     return res.status(200).json({ success: true, tiers });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -89,5 +91,6 @@ export const getLeaderboard = async (req: Request, res: Response, next: NextFunc
     return res.status(200).json({ success: true, leaderboard, total: leaderboard.length, limit });
   } catch (err) {
     next(err);
+    return;
   }
 };

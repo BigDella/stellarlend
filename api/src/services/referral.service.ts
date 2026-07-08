@@ -72,6 +72,8 @@ export const referralService = {
         claimable: 0,
         lastClaimAt: 0,
         referees: [],
+        tier: 0,
+        totalDeposit: 0,
       });
     }
 

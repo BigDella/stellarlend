@@ -107,7 +107,7 @@ export const submitKycVerification = async (req: Request, res: Response): Promis
 export const getKycStatus = async (req: Request, res: Response): Promise<void> => {
   try {
     const { userAddress } = req.params;
-    const status = await getVerificationStatus(userAddress);
+    const status = await getVerificationStatus(userAddress!);
     if (!status) {
       res.status(404).json({ error: 'Verification attestation not found' });
       return;
@@ -122,7 +122,7 @@ export const getKycStatus = async (req: Request, res: Response): Promise<void> =
 export const revokeKycAttestation = async (req: Request, res: Response): Promise<void> => {
   try {
     const { userAddress } = req.params;
-    const revoked = await revokeVerification(userAddress);
+    const revoked = await revokeVerification(userAddress!);
     if (!revoked) {
       res.status(404).json({ error: 'Verification attestation not found' });
       return;
@@ -136,5 +136,5 @@ export const revokeKycAttestation = async (req: Request, res: Response): Promise
 
 export const getPrivacyProof = (req: Request, res: Response): void => {
   const { userAddress } = req.params;
-  res.json(getVerificationProof(userAddress));
+  res.json(getVerificationProof(userAddress!));
 };

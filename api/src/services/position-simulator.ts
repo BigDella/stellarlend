@@ -1,8 +1,8 @@
 import logger from '../utils/logger';
 
 interface Position {
-  collateral: i128;
-  debt: i128;
+  collateral: number;
+  debt: number;
   asset: string;
 }
 
@@ -18,8 +18,8 @@ interface ScenarioResult {
   scenario_name: string;
   initial_health: number;
   final_health: number;
-  collateral_change: i128;
-  debt_change: i128;
+  collateral_change: number;
+  debt_change: number;
   is_liquidatable: boolean;
   estimated_gas_cost: number;
   timestamp: number;
@@ -269,7 +269,7 @@ export const positionSimulator = {
   /**
    * Helper: Calculate health factor
    */
-  private calculateHealthFactor(position: Position): number {
+  calculateHealthFactor(position: Position): number {
     if (position.debt === 0) return Number.POSITIVE_INFINITY;
     return position.collateral / position.debt;
   },
@@ -277,9 +277,8 @@ export const positionSimulator = {
   /**
    * Helper: Calculate liquidation price
    */
-  private calculateLiquidationPrice(position: Position): number {
+  calculateLiquidationPrice(position: Position): number {
     if (position.debt === 0) return 0;
-    // Simplified: liquidation at 1.0 health factor
     return position.debt / position.collateral;
   },
 

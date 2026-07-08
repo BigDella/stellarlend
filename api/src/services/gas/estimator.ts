@@ -260,7 +260,7 @@ export class GasEstimatorService {
    * Get historical gas data for an operation
    */
   async getHistoricalData(operation: GasOperation, period: string): Promise<HistoricalGasData> {
-    const cacheKey = redisCacheService.buildKey('gas', 'historical', operation, period);
+    const cacheKey = redisCacheService.buildKey('gas', `historical:${operation}:${period}`);
     const cached = await redisCacheService.get<HistoricalGasData>(cacheKey);
     
     if (cached) {
@@ -310,7 +310,11 @@ export class GasEstimatorService {
     });
 
     // Calculate relative costs and ranks
-    const referenceCost = BigInt(costs[0].averageCost);
+    const cheapest = costs[0];
+    if (!cheapest) {
+      return { operations: [], referenceOperation: 'deposit', timestamp: new Date().toISOString() };
+    }
+    const referenceCost = BigInt(cheapest.averageCost);
     costs.forEach((item, index) => {
       item.rank = index + 1;
       item.relativeCost = Number(BigInt(item.averageCost) * BigInt(100) / referenceCost) / 100;
@@ -318,7 +322,7 @@ export class GasEstimatorService {
 
     return {
       operations: costs,
-      referenceOperation: costs[0].operation,
+      referenceOperation: cheapest.operation,
       timestamp: new Date().toISOString(),
     };
   }
@@ -327,7 +331,7 @@ export class GasEstimatorService {
    * Get historical gas chart data
    */
   async getHistoricalChart(operation: GasOperation, period: string): Promise<HistoricalGasChartData> {
-    const cacheKey = redisCacheService.buildKey('gas', 'chart', operation, period);
+    const cacheKey = redisCacheService.buildKey('gas', `chart:${operation}:${period}`);
     const cached = await redisCacheService.get<HistoricalGasChartData>(cacheKey);
     
     if (cached) {
@@ -355,7 +359,7 @@ export class GasEstimatorService {
     this.alerts.set(alertId, config);
     
     // Persist to cache
-    const cacheKey = redisCacheService.buildKey('gas', 'alerts', alertId);
+    const cacheKey = redisCacheService.buildKey('gas', `alerts:${alertId}`);
     await redisCacheService.set(cacheKey, config, 86400 * 30); // 30 days
     
     logger.info('Gas alert configured:', config);
@@ -408,7 +412,7 @@ export class GasEstimatorService {
     }
 
     // Cache metric
-    const cacheKey = redisCacheService.buildKey('gas', 'accuracy', txHash);
+    const cacheKey = redisCacheService.buildKey('gas', `accuracy:${txHash}`);
     await redisCacheService.set(cacheKey, metric, 86400 * 7); // 7 days
 
     logger.info('Gas accuracy recorded:', { operation, errorPercent: `${errorPercent}%` });
@@ -661,7 +665,7 @@ export class GasEstimatorService {
       '7d': { pointCount: 28, intervalMs: 6 * 3600000 }, // 6-hourly
       '30d': { pointCount: 30, intervalMs: 24 * 3600000 }, // Daily
     };
-    return configs[period] || configs['7d'];
+    return configs[period] ?? { pointCount: 28, intervalMs: 6 * 3600000 };
   }
 
   private getPeriodCutoff(period: string): Date {
@@ -671,12 +675,12 @@ export class GasEstimatorService {
       '7d': 7 * 24 * 60 * 60 * 1000,
       '30d': 30 * 24 * 60 * 60 * 1000,
     };
-    const ms = periods[period] || periods['7d'];
+    const ms = periods[period] ?? 7 * 24 * 60 * 60 * 1000;
     return new Date(now.getTime() - ms);
   }
 
   private async cacheEstimate(operation: GasOperation, estimate: GasCostEstimate): Promise<void> {
-    const cacheKey = redisCacheService.buildKey('gas', 'estimate', operation);
+    const cacheKey = redisCacheService.buildKey('gas', `estimate:${operation}`);
     await redisCacheService.set(cacheKey, estimate, 300); // Cache 5 minutes
   }
 
@@ -708,7 +712,7 @@ export class GasEstimatorService {
         logger.warn('Gas cost alert triggered:', costAlert);
         
         // Cache alert
-        const cacheKey = redisCacheService.buildKey('gas', 'alert', costAlert.id);
+        const cacheKey = redisCacheService.buildKey('gas', `alert:${costAlert.id}`);
         await redisCacheService.set(cacheKey, costAlert, 86400); // 24 hours
       }
     }

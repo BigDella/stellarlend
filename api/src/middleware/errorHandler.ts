@@ -39,7 +39,7 @@ export const errorHandler = (err: Error, req: Request, res: Response, next: Next
       error: {
         code: err.code,
         message: err.message,
-        ...(err.details && { details: err.details }),
+        ...(err.details ? { details: err.details } : {}),
       },
       requestId,
     };

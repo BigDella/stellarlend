@@ -18,7 +18,7 @@ function validateAddress(address: string): void {
 
 router.get('/:address', async (req: Request, res: Response) => {
   try {
-    const { address } = req.params;
+    const { address } = req.params!;
     validateAddress(address);
 
     const state = await nonceManager.getNonceState(address);
@@ -123,7 +123,7 @@ router.post('/fill-gaps', async (req: Request, res: Response) => {
 
 router.get('/:address/pending', async (req: Request, res: Response) => {
   try {
-    const { address } = req.params;
+    const { address } = req.params!;
     validateAddress(address);
 
     const pending = await nonceManager.getPendingNonces(address);
@@ -140,7 +140,7 @@ router.get('/:address/pending', async (req: Request, res: Response) => {
 
 router.get('/:address/next-available', async (req: Request, res: Response) => {
   try {
-    const { address } = req.params;
+    const { address } = req.params!;
     validateAddress(address);
 
     const nextNonce = await nonceManager.getNextNonce(address);

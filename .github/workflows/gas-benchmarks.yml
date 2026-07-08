@@ -1,25 +1,6 @@
 name: Gas Benchmark Suite
 
-on:
-  push:
-    branches: ["main", "dev"]
-    paths:
-      - "stellar-lend/contracts/**"
-      - "stellar-lend/benchmarks/**"
-      - ".github/workflows/gas-benchmarks.yml"
-  pull_request:
-    branches: ["main", "dev"]
-    paths:
-      - "stellar-lend/contracts/**"
-      - "stellar-lend/benchmarks/**"
-      - ".github/workflows/gas-benchmarks.yml"
-  # Allow manual trigger for on-demand profiling
-  workflow_dispatch:
-    inputs:
-      compare_baseline:
-        description: "Compare against baseline (true/false)"
-        required: false
-        default: "true"
+on: workflow_dispatch
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

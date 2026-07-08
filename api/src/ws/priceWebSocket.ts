@@ -2,16 +2,16 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
 import { Server } from 'http';
 import axios from 'axios';
-import logger from '@/utils/logger';
-import { config } from '@/config';
+import logger from '../utils/logger';
+import { config } from '../config/index';
 import {
   PriceData,
   ClientMessage,
   ServerMessage,
   WsSubscribeMessage,
   WsUnsubscribeMessage,
-} from '@/types';
-import { WsAnalyticsMessage } from '@/types/analytics';
+} from '../types/index';
+import { WsAnalyticsMessage } from '../types/analytics';
 
 const SUPPORTED_ASSETS = ['XLM', 'USDC', 'BTC', 'ETH', 'SOL'];
 const ANALYTICS_CHANNELS = ['apy', 'utilization', 'revenue'] as const;
@@ -170,7 +170,7 @@ export class PriceWebSocketServer {
   }
 
   private validateAuthToken(token: string): boolean {
-    return token && token.length > 10;
+    return token.length > 10;
   }
 
   private extractUserIdFromToken(token: string): string | undefined {
@@ -372,6 +372,7 @@ export class PriceWebSocketServer {
 
       SUPPORTED_ASSETS.forEach((asset) => {
         const id = COINGECKO_IDS[asset];
+        if (!id) return;
         const price = response.data[id]?.usd;
         if (price !== undefined) {
           prices.set(asset, price);
@@ -408,8 +409,8 @@ export class PriceWebSocketServer {
       data: data as any,
       timestamp: Date.now(),
     };
-    this.analyticsSubscriptions.forEach((subs, ws) => {
-      if (subs.has(channel)) {
+    this.clientStates.forEach((state, ws) => {
+      if (state.analyticsSubscriptions.has(channel)) {
         this.send(ws, msg as any);
       }
     });

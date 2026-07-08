@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import {
   validatePositionImport,
   preparePositionImport,
-  exportPositions,
+  exportPositions as exportPositionsUtil,
   generateImportTemplate,
   createImportHistory,
 } from '../utils/positionImportExport';
@@ -83,7 +83,7 @@ export async function exportPositions(req: Request, res: Response): Promise<void
 
     const mockPositions: any[] = [];
 
-    const exportData = exportPositions(mockPositions, options);
+    const exportData = exportPositionsUtil(mockPositions, options);
 
     if (options.format === 'csv' && exportData.csvData) {
       res.setHeader('Content-Type', 'text/csv');

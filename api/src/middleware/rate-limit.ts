@@ -45,19 +45,23 @@ function parseLimit(operation: Operation): OperationLimit {
     return DEFAULT_LIMITS[operation];
   }
 
-  const [max, windowMs, throttleAfter, blockAfter] = raw.split(':').map((part) => Number(part));
+  const parts = raw.split(':').map((part) => Number(part));
+  const m = parts[0];
+  const w = parts[1];
+  const t = parts[2];
+  const b = parts[3];
 
   return {
-    max: Number.isFinite(max) && max > 0 ? max : DEFAULT_LIMITS[operation].max,
+    max: m !== undefined && Number.isFinite(m) && m > 0 ? m : DEFAULT_LIMITS[operation].max,
     windowMs:
-      Number.isFinite(windowMs) && windowMs > 0 ? windowMs : DEFAULT_LIMITS[operation].windowMs,
+      w !== undefined && Number.isFinite(w) && w > 0 ? w : DEFAULT_LIMITS[operation].windowMs,
     throttleAfter:
-      Number.isFinite(throttleAfter) && throttleAfter >= 0
-        ? throttleAfter
+      t !== undefined && Number.isFinite(t) && t >= 0
+        ? t
         : DEFAULT_LIMITS[operation].throttleAfter,
     blockAfter:
-      Number.isFinite(blockAfter) && blockAfter > 0
-        ? blockAfter
+      b !== undefined && Number.isFinite(b) && b > 0
+        ? b
         : DEFAULT_LIMITS[operation].blockAfter,
   };
 }

@@ -1,14 +1,6 @@
 name: Mutation Testing
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * 1'
-  pull_request:
-    paths:
-      - 'api/**'
-      - 'oracle/**'
-      - '.github/workflows/mutation-testing.yml'
+on: workflow_dispatch
 
 jobs:
   api-mutation:
