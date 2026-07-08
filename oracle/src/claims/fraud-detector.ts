@@ -246,7 +246,7 @@ export class FraudDetector {
     ];
     return signals.reduce((max, s) =>
       order.indexOf(s.severity) > order.indexOf(max) ? s.severity : max,
-      signals[0].severity
+      signals[0]!.severity
     );
   }
 }

@@ -190,8 +190,8 @@ export class OracleIncidentMonitor {
         }
 
         // Calculate volatility
-        const oldestPrice = window.prices[0].price;
-        const newestPrice = window.prices[window.prices.length - 1].price;
+        const oldestPrice = window.prices[0]!.price;
+        const newestPrice = window.prices[window.prices.length - 1]!.price;
 
         if (oldestPrice === 0) {
             return;

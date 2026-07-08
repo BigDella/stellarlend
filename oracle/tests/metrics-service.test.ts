@@ -4,7 +4,7 @@
  * Tests for the metrics tracking service and HTTP endpoint
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import http from 'http';
 import { MetricsService, createMetricsService } from '../src/services/metrics-service.js';
 
@@ -229,15 +229,16 @@ describe('MetricsService', () => {
   });
 
   describe('uptime tracking', () => {
-    it('should track uptime correctly', async () => {
+    it('should track uptime correctly', () => {
+      vi.useFakeTimers();
       const initialUptime = metricsService.getUptime();
       expect(initialUptime).toBeGreaterThanOrEqual(0);
 
-      // Wait 100ms
-      await new Promise(resolve => setTimeout(resolve, 100));
+      vi.advanceTimersByTime(1500);
 
       const laterUptime = metricsService.getUptime();
       expect(laterUptime).toBeGreaterThan(initialUptime);
+      vi.useRealTimers();
     });
   });
 });

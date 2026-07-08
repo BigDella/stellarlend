@@ -268,59 +268,50 @@ describe('ContractUpdater', () => {
     vi.useRealTimers();
   });
 
-  it('should apply exponential backoff delays between retries', async () => {
-    const delays: number[] = [];
-    let callCount = 0;
+  it('should apply exponential backoff delays between retries via updatePrice', async () => {
+    const { SorobanRpc } = await import('@stellar/stellar-sdk');
+    const mockServer = new SorobanRpc.Server('mock');
 
-    const mockFn = vi.fn().mockImplementation(() => {
-      callCount++;
-      if (callCount < 3) throw new Error('Temporary failure');
-      return Promise.resolve({ success: true });
+    let attemptCount = 0;
+    vi.spyOn(mockServer, 'simulateTransaction').mockImplementation(async () => {
+      attemptCount++;
+      if (attemptCount < 3) throw new Error('Temporary failure');
+      return { results: [{ xdr: 'mock-xdr' }] };
     });
 
-    const promise = updater.updateWithRetry(mockFn, {
-      maxRetries: 3,
-      baseDelay: 1000,
-      backoffFactor: 2,
-    });
+    const resultPromise = updater.updatePrice('XLM', 150000n, Date.now());
+    await vi.advanceTimersByTimeAsync(1000); // retry 1 delay
+    await vi.advanceTimersByTimeAsync(2000); // retry 2 delay
+    const result = await resultPromise;
 
-    // Advance through first delay (1s)
-    await vi.advanceTimersByTimeAsync(1000);
-    delays.push(1000);
-
-    // Advance through second delay (2s)
-    await vi.advanceTimersByTimeAsync(2000);
-    delays.push(2000);
-
-    await promise;
-
-    expect(delays[0]).toBe(1000);   // 1s
-    expect(delays[1]).toBe(2000);   // 2s
-    expect(mockFn).toHaveBeenCalledTimes(3);
+    expect(result.success).toBe(true);
+    expect(attemptCount).toBe(3);
   });
 
   it('should apply 4s delay on third retry', async () => {
-    let callCount = 0;
+    const { SorobanRpc } = await import('@stellar/stellar-sdk');
+    const mockServer = new SorobanRpc.Server('mock');
 
-    const mockFn = vi.fn().mockImplementation(() => {
-      callCount++;
-      if (callCount < 4) throw new Error('Temporary failure');
-      return Promise.resolve({ success: true });
-    });
-
-    const promise = updater.updateWithRetry(mockFn, {
+    const retryUpdater = createContractUpdater({
+      ...mockConfig,
       maxRetries: 4,
-      baseDelay: 1000,
-      backoffFactor: 2,
     });
 
+    let attemptCount = 0;
+    vi.spyOn(mockServer, 'simulateTransaction').mockImplementation(async () => {
+      attemptCount++;
+      if (attemptCount < 4) throw new Error('Temporary failure');
+      return { results: [{ xdr: 'mock-xdr' }] };
+    });
+
+    const resultPromise = retryUpdater.updatePrice('XLM', 150000n, Date.now());
     await vi.advanceTimersByTimeAsync(1000); // retry 1
     await vi.advanceTimersByTimeAsync(2000); // retry 2
     await vi.advanceTimersByTimeAsync(4000); // retry 3
+    const result = await resultPromise;
 
-    await promise;
-
-    expect(mockFn).toHaveBeenCalledTimes(4);
+    expect(result.success).toBe(true);
+    expect(attemptCount).toBe(4);
   });
 });
 

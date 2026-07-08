@@ -10,6 +10,7 @@
     "declarationMap": true,
     "baseUrl": "./src",
     "paths": {
+      "@/*": ["*"],
       "@/claims/*": ["claims/*"],
       "@/config/*": ["config/*"],
       "@/devtools/*": ["devtools/*"],

@@ -166,7 +166,7 @@ export class ClaimVerifier {
       priceAtVerification: oraclePrice.price,
       priceTimestamp: oraclePrice.timestamp,
       confidence: oraclePrice.confidence,
-      sources: oraclePrice.sources.map((s) => s.source),
+      sources: oraclePrice.sources.map((s: { source: string }) => s.source),
       verifiedAt: now,
     };
 

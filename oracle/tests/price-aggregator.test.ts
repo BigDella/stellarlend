@@ -291,27 +291,22 @@ describe('PriceAggregator – priority-based failover', () => {
     // 1. High fails → circuit opens → mid serves
     high.setFail(true);
     const r1 = await agg.getPrice('XLM');
-    expect(r1!.sources[0].source).toBe('mid');
+    expect(r1!.sources[0]!.source).toBe('mid');
 
     // 2. High recovers; backoffMs=0 → HALF_OPEN probe allowed immediately
     high.setFail(false);
 
-    // Use a fresh cache so the next getPrice() triggers a real fetch
-    const cache2 = createPriceCache(30);
-    const agg2 = createAggregator([high, mid, low], validator, cache2, {
-      minSources: 1,
-      failoverMode: true,
-      circuitBreaker: { failureThreshold: 1, backoffMs: 0 },
-    });
-
-    // Open circuit for high in agg2
+    // Open circuit for high in agg
     high.setFail(true);
-    await agg2.getPrice('XLM'); // opens circuit
+    await agg.getPrice('XLM'); // opens circuit, result cached
     high.setFail(false);
 
+    // Clear cache so the next getPrice() triggers a real fetch
+    await cache.clear();
+
     // Next request: backoffMs=0 → HALF_OPEN probe → high succeeds → CLOSED → high serves
-    const r2 = await agg2.getPrice('XLM');
-    expect(r2!.sources[0].source).toBe('high');
+    const r2 = await agg.getPrice('XLM');
+    expect(r2!.sources[0]!.source).toBe('high');
   });
 
   it('isFailoverMode() returns true when failoverMode is enabled', () => {

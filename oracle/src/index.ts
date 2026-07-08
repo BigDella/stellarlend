@@ -321,10 +321,10 @@ export class OracleService {
 
   private normalizeProviders(providers: ProviderConfig[]): ProviderConfig[] {
     if (providers.length === 1) {
-      return [{ ...providers[0], weight: 1 }];
+      return [{ ...providers[0], weight: 1 } as ProviderConfig];
     }
 
-    return providers.map((provider) => ({ ...provider }));
+    return providers.map((provider) => ({ ...provider } as ProviderConfig));
   }
 
   private createRuntimeProviders(configuredProviders: ProviderConfig[]): BasePriceProvider[] {

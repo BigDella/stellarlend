@@ -296,10 +296,10 @@ export class PriceAggregator {
     if (prices.length === 1) {
       return {
         asset,
-        price: prices[0].price,
+        price: prices[0]!.price,
         sources: prices,
         timestamp: now,
-        confidence: prices[0].confidence,
+        confidence: prices[0]!.confidence,
       };
     }
 
@@ -343,13 +343,13 @@ export class PriceAggregator {
 
     let cumWeight = 0;
     for (let i = 0; i < sorted.length; i++) {
-      cumWeight += weights[i];
+      cumWeight += weights[i]!;
       if (cumWeight >= halfWeight) {
-        return sorted[i].price;
+        return sorted[i]!.price;
       }
     }
 
-    return sorted[sorted.length - 1].price;
+    return sorted[sorted.length - 1]!.price;
   }
 
   /**
@@ -361,11 +361,11 @@ export class PriceAggregator {
     const mid = Math.floor(sorted.length / 2);
 
     if (sorted.length % 2 === 0) {
-      const avg = (sorted[mid - 1].price + sorted[mid].price) / 2n;
+      const avg = (sorted[mid - 1]!.price + sorted[mid]!.price) / 2n;
       return avg;
     }
 
-    return sorted[mid].price;
+    return sorted[mid]!.price;
   }
 
   /**
