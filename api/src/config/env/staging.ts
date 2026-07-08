@@ -10,7 +10,7 @@ const stagingOverrides: Partial<AppConfig> = {
   },
   cache: {
     redisEnabled: true,
-    redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+    redisUrl: process.env.REDIS_URL || '',
     idempotencyTtlMs: 86400000,
     idempotencyMaxEntries: 5000,
     protocolStatsTtlMs: 15000,

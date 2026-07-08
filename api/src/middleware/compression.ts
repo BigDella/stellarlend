@@ -47,7 +47,7 @@ export function compressionMiddleware(config: Partial<CompressionConfig> = {}) {
 function compressAndSend(
   res: Response,
   body: any,
-  originalSend: Function,
+  originalSend: (body: any) => Response,
   acceptEncoding: string,
   config: CompressionConfig
 ): Response {

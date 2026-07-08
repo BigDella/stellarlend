@@ -58,6 +58,7 @@ describe('Config Validation', () => {
     process.env.CONTRACT_ID = 'TEST_CONTRACT_ID';
     process.env.JWT_SECRET = 'a-secure-secret-that-is-at-least-thirty-two-characters-long';
     process.env.NODE_ENV = 'production';
+    process.env.REDIS_URL = 'redis://localhost:6379';
     delete process.env.ALLOWED_ORIGINS;
 
     expect(() => {

@@ -2,7 +2,7 @@ import { AppConfig } from './types';
 import { ValidationError } from '../utils/errors';
 import { configAuditService } from '../services/configAudit.service';
 
-const VALID_ENVS = ['development', 'staging', 'production'] as const;
+const VALID_ENVS = ['development', 'staging', 'production', 'test'] as const;
 const VALID_NETWORKS = ['testnet', 'mainnet'] as const;
 const VALID_LOG_LEVELS = ['error', 'warn', 'info', 'debug'] as const;
 
@@ -24,7 +24,7 @@ export function validateConfig(config: AppConfig): string[] {
   const errors: string[] = [];
 
   if (!VALID_ENVS.includes(config.server.env as any)) {
-    errors.push('NODE_ENV must be one of development, staging, production');
+    errors.push('NODE_ENV must be one of development, staging, production, test');
   }
 
   if (!VALID_NETWORKS.includes(config.stellar.network as any)) {

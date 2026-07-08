@@ -324,7 +324,7 @@ export const getTransactionHistory = async (req: Request, res: Response, next: N
     const stellarService = new StellarService();
     const pagination = parsePaginationParams(req.query as Record<string, unknown>);
     const query: TransactionHistoryQuery = {
-      userAddress: req.params!.userAddress,
+      userAddress: req.params!.userAddress!,
       limit: pagination.limit,
       cursor: pagination.cursor ?? undefined,
     };
@@ -351,7 +351,7 @@ export const streamTransactionHistory = async (req: Request, res: Response, next
   try {
     const stellarService = new StellarService();
     const stream = stellarService.streamTransactionHistory(
-      req.params!.userAddress,
+      req.params!.userAddress!,
       pageSize,
       abort.signal
     );

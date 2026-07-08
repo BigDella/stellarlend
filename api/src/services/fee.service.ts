@@ -81,7 +81,7 @@ export const feeService = {
     const utilPremium = Math.floor((utilizationBps * config.utilizationWeightBps) / 10_000);
     const volPremium = Math.floor((volatilityBps * config.volatilityWeightBps) / 10_000);
 
-    let rawSpread = config.baseSpreadBps + utilPremium + volPremium;
+    const rawSpread = config.baseSpreadBps + utilPremium + volPremium;
     let spreadFee = clamp(rawSpread, config.minFeeBps, config.maxFeeBps);
 
     const prev = lastFee.get(asset);

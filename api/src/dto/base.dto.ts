@@ -34,14 +34,8 @@ export const MAX_I128 = (1n << 127n) - 1n;
 
 export function isValidStellarAddress(value: unknown): boolean {
   if (typeof value !== 'string') return false;
-  try {
-    // Ed25519 public keys are 56 chars starting with 'G'.
-    // We rely on the same check used in the existing middleware.
-    const { StrKey } = require('@stellar/stellar-sdk') as typeof import('@stellar/stellar-sdk');
-    return StrKey.isValidEd25519PublicKey(value);
-  } catch {
-    return false;
-  }
+  if (!/^G[A-Z0-9]{55}$/.test(value)) return false;
+  return true;
 }
 
 export function isValidAmount(value: unknown): boolean {

@@ -19,9 +19,9 @@ function validateAddress(address: string): void {
 router.get('/:address', async (req: Request, res: Response) => {
   try {
     const { address } = req.params!;
-    validateAddress(address);
+    validateAddress(address!);
 
-    const state = await nonceManager.getNonceState(address);
+    const state = await nonceManager.getNonceState(address!);
     const response: NonceStateResponse = {
       address: state.address,
       currentNonce: state.currentNonce,
@@ -124,9 +124,9 @@ router.post('/fill-gaps', async (req: Request, res: Response) => {
 router.get('/:address/pending', async (req: Request, res: Response) => {
   try {
     const { address } = req.params!;
-    validateAddress(address);
+    validateAddress(address!);
 
-    const pending = await nonceManager.getPendingNonces(address);
+    const pending = await nonceManager.getPendingNonces(address!);
     res.json({ pending });
   } catch (error) {
     logger.error('Error fetching pending nonces:', error);
@@ -141,9 +141,9 @@ router.get('/:address/pending', async (req: Request, res: Response) => {
 router.get('/:address/next-available', async (req: Request, res: Response) => {
   try {
     const { address } = req.params!;
-    validateAddress(address);
+    validateAddress(address!);
 
-    const nextNonce = await nonceManager.getNextNonce(address);
+    const nextNonce = await nonceManager.getNextNonce(address!);
     res.json({ nextNonce });
   } catch (error) {
     logger.error('Error fetching next nonce:', error);

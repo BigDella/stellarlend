@@ -58,7 +58,7 @@ export class GasController {
       const period = (req.query.period as string) || '30d';
 
       const validOperations = ['deposit', 'withdraw', 'borrow', 'repay', 'liquidation', 'flash_loan'];
-      if (!validOperations.includes(operation)) {
+      if (!validOperations.includes(operation!)) {
         throw new ValidationError('Invalid operation');
       }
 
@@ -87,7 +87,7 @@ export class GasController {
       const period = (req.query.period as string) || '7d';
 
       const validOperations = ['deposit', 'withdraw', 'borrow', 'repay', 'liquidation', 'flash_loan'];
-      if (!validOperations.includes(operation)) {
+      if (!validOperations.includes(operation!)) {
         throw new ValidationError('Invalid operation');
       }
 
@@ -247,7 +247,7 @@ export class GasController {
       const { operation } = req.params!;
 
       const validOperations = ['deposit', 'withdraw', 'borrow', 'repay', 'liquidation', 'flash_loan'];
-      if (!validOperations.includes(operation)) {
+      if (!validOperations.includes(operation!)) {
         throw new ValidationError('Invalid operation');
       }
 

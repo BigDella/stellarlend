@@ -215,8 +215,8 @@ class ComplianceService {
     const errors: string[] = [];
     let sanctionsMatch = false;
     let kycValid = true;
-    let withinLimits = true;
-    let geoRestricted = false;
+    const withinLimits = true;
+    const geoRestricted = false;
 
     if (this.checkSanctioned(params.from) || this.checkSanctioned(params.to)) {
       sanctionsMatch = true;
@@ -324,7 +324,7 @@ class ComplianceService {
   }
 
   getAuditTrail(address?: string, limit: number = 100): ComplianceEvent[] {
-    let filtered = address
+    const filtered = address
       ? events.filter((e) => e.address.toLowerCase() === address.toLowerCase())
       : events;
     return filtered.slice(-limit);

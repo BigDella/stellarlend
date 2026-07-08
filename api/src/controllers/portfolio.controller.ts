@@ -30,11 +30,11 @@ export const getPortfolioAnalytics = async (
 
     const stellarService = new StellarService();
     const [position, history] = await Promise.all([
-      stellarService.getUserPosition(userAddress),
-      stellarService.getTransactionHistory({ userAddress, limit: 200 }),
+      stellarService.getUserPosition(userAddress!),
+      stellarService.getTransactionHistory({ userAddress: userAddress!, limit: 200 }),
     ]);
 
-    const analytics = analyzePortfolio(userAddress, position, history.data);
+    const analytics = analyzePortfolio(userAddress!, position, history.data);
 
     await redisCacheService.set(cacheKey, analytics, PORTFOLIO_CACHE_TTL_S);
 
@@ -53,8 +53,8 @@ export const getPortfolioRisk = async (
   try {
     const { userAddress } = req.params!;
     const stellarService = new StellarService();
-    const position = await stellarService.getUserPosition(userAddress);
-    const analytics = analyzePortfolio(userAddress, position, []);
+    const position = await stellarService.getUserPosition(userAddress!);
+    const analytics = analyzePortfolio(userAddress!, position!, []);
 
     res.status(200).json({
       userAddress,
@@ -79,11 +79,11 @@ export const getPortfolioPerformance = async (
 
     const stellarService = new StellarService();
     const [position, history] = await Promise.all([
-      stellarService.getUserPosition(userAddress),
-      stellarService.getTransactionHistory({ userAddress, limit }),
+      stellarService.getUserPosition(userAddress!),
+      stellarService.getTransactionHistory({ userAddress: userAddress!, limit }),
     ]);
 
-    const analytics = analyzePortfolio(userAddress, position, history.data);
+    const analytics = analyzePortfolio(userAddress!, position, history.data);
 
     res.status(200).json({
       userAddress,
@@ -108,17 +108,17 @@ export const exportPortfolio = async (
 
     const stellarService = new StellarService();
     const [position, history] = await Promise.all([
-      stellarService.getUserPosition(userAddress),
-      stellarService.getTransactionHistory({ userAddress, limit: 200 }),
+      stellarService.getUserPosition(userAddress!),
+      stellarService.getTransactionHistory({ userAddress: userAddress!, limit: 200 }),
     ]);
 
-    const analytics = analyzePortfolio(userAddress, position, history.data);
+    const analytics = analyzePortfolio(userAddress!, position, history.data);
 
     if (format === 'csv') {
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="portfolio-${userAddress.slice(0, 8)}.csv"`
+        `attachment; filename="portfolio-${userAddress!.slice(0, 8)}.csv"`
       );
       res.status(200).send(toCSV(history.data));
       return;
@@ -127,7 +127,7 @@ export const exportPortfolio = async (
     res.setHeader('Content-Type', 'application/json');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="portfolio-${userAddress.slice(0, 8)}.json"`
+      `attachment; filename="portfolio-${userAddress!.slice(0, 8)}.json"`
     );
     res.status(200).json({
       exportedAt: new Date().toISOString(),
@@ -149,7 +149,7 @@ export const getInterestProjection = async (
   try {
     const { userAddress } = req.params!;
     const stellarService = new StellarService();
-    const position = await stellarService.getUserPosition(userAddress);
+    const position = await stellarService.getUserPosition(userAddress!);
     const borrowApy = req.query.borrowApy ? Number(req.query.borrowApy) : 0.05;
 
     const projection = computeInterestAccrualProjection(position, borrowApy);
@@ -174,7 +174,7 @@ export const getLiquidationPrice = async (
     const currentPrice = req.query.price ? Number(req.query.price) : 1;
 
     const stellarService = new StellarService();
-    const position = await stellarService.getUserPosition(userAddress);
+    const position = await stellarService.getUserPosition(userAddress!);
 
     const liquidation = computeLiquidationPrice(position, currentPrice);
     res.status(200).json({
@@ -198,7 +198,7 @@ export const getHealthFactorMonitor = async (
     const { userAddress } = req.params!;
 
     const stellarService = new StellarService();
-    const position = await stellarService.getUserPosition(userAddress);
+    const position = await stellarService.getUserPosition(userAddress!);
 
     const monitor = buildHealthFactorMonitor(position);
     res.status(200).json({

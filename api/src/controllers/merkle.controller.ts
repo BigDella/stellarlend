@@ -17,7 +17,7 @@ export const upsertAccount = async (req: Request, res: Response, next: NextFunct
 export const getProof = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress } = req.params!;
-    const proof = merkleProofService.generateProof(userAddress);
+    const proof = merkleProofService.generateProof(userAddress!);
     return res.status(200).json({ success: true, proof });
   } catch (err) {
     next(err);
@@ -49,7 +49,7 @@ export const getTreeInfo = async (_req: Request, res: Response, next: NextFuncti
 export const getAccount = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress } = req.params!;
-    const account = merkleProofService.getAccount(userAddress);
+    const account = merkleProofService.getAccount(userAddress!);
     return res.status(200).json({ success: true, account });
   } catch (err) {
     next(err);

@@ -5,7 +5,7 @@ export class RiskController {
   async getPoolHealth(req: Request, res: Response): Promise<void> {
     try {
       const { poolId } = req.params!;
-      const metrics = await riskMonitoringService.getPoolHealthMetrics(poolId);
+      const metrics = await riskMonitoringService.getPoolHealthMetrics(poolId!);
       res.json(metrics);
     } catch (error) {
       res.status(500).json({ error: 'Failed to fetch pool health metrics' });
@@ -81,7 +81,7 @@ export class RiskController {
   async getUserRiskProfile(req: Request, res: Response): Promise<void> {
     try {
       const { address } = req.params!;
-      const profile = await riskMonitoringService.getUserRiskProfile(address);
+      const profile = await riskMonitoringService.getUserRiskProfile(address!);
       res.json(profile);
     } catch (error) {
       res.status(500).json({ error: 'Failed to fetch user risk profile' });

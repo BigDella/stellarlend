@@ -120,7 +120,7 @@ function buildConfig(): AppConfig {
     },
     cache: {
       redisEnabled: process.env.REDIS_ENABLED === 'true',
-      redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+      redisUrl: process.env.REDIS_URL || '',
       idempotencyTtlMs: parseInt(
         process.env.IDEMPOTENCY_TTL_MS || '86400000',
         10

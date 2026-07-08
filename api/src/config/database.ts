@@ -92,7 +92,7 @@ export class DatabaseConnectionManager {
       return healthA.lagMs - healthB.lagMs;
     });
 
-    return healthyReplicas[0].host;
+    return healthyReplicas[0]!.host;
   }
 
   /**

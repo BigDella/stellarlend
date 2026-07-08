@@ -209,7 +209,7 @@ app.use('/api/nonce', nonceRoutes);
 app.use(errorHandler);
 
 void redisCacheService.warmup(async () => {
-  const { StellarService } = await import('./services/stellar.service');
+  const { StellarService } = await import('./services/stellar.service.js');
   const svc = new StellarService();
   await svc.getProtocolStats();
 });

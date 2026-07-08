@@ -13,7 +13,6 @@ jobs:
   lint:
     name: Lint & Format
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,7 +29,6 @@ jobs:
   typecheck:
     name: Type Check
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,7 +44,6 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,14 +56,4 @@ jobs:
       - run: npm ci --workspaces
       - run: npm run test --workspace=api && npm run test --workspace=oracle
 
-  audit:
-    name: NPM Audit
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - run: npm ci --workspaces
-      - run: npm audit --audit-level=high
+

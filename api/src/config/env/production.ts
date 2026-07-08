@@ -10,7 +10,7 @@ const productionOverrides: Partial<AppConfig> = {
   },
   cache: {
     redisEnabled: true,
-    redisUrl: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+    redisUrl: process.env.REDIS_URL || '',
     idempotencyTtlMs: 86400000,
     idempotencyMaxEntries: 10000,
     protocolStatsTtlMs: 10000,

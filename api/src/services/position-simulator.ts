@@ -211,7 +211,7 @@ export const positionSimulator = {
     changeType: 'deposit' | 'withdraw' | 'borrow' | 'repay',
     amount: number,
   ): HealthFactor {
-    let updatedPosition = { ...position };
+    const updatedPosition = { ...position };
 
     switch (changeType) {
       case 'deposit':

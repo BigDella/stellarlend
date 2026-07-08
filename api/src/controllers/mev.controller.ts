@@ -178,7 +178,7 @@ export const getAuctionResult = async (
 ): Promise<void> => {
   try {
     const { slotId } = req.params!;
-    const result = await mevService.getAuctionResult(slotId);
+    const result = await mevService.getAuctionResult(slotId!);
 
     if (!result) {
       res.status(404).json({ success: false, error: 'Auction slot not found or not yet settled' });

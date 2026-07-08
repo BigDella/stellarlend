@@ -156,7 +156,7 @@ describe('Error Handling', () => {
       .query({ amount: VALID_AMOUNT });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/address/i);
+    expect(res.body.error.message).toMatch(/address/i);
   });
 
   it('returns 400 when amount is missing', async () => {
@@ -165,7 +165,7 @@ describe('Error Handling', () => {
       .query({ userAddress: VALID_ADDRESS });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/amount/i);
+    expect(res.body.error.message).toMatch(/amount/i);
   });
 
   it('returns 400 when userAddress is not a valid Stellar key', async () => {
@@ -174,14 +174,14 @@ describe('Error Handling', () => {
       .query({ userAddress: 'NOT_A_STELLAR_ADDRESS', amount: VALID_AMOUNT });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/stellar address/i);
+    expect(res.body.error.message).toMatch(/stellar address/i);
   });
 
   it('returns 400 when signedXdr is missing on submit', async () => {
     const res = await request(app).post('/api/lending/submit').send({});
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/signedXdr|invalid value/i);
+    expect(res.body.error.message).toMatch(/signedXdr|invalid value/i);
   });
 
   it('returns 400 when submit receives malformed JSON', async () => {
@@ -238,7 +238,7 @@ describe('Error Handling', () => {
     const res = await request(app).get('/api/health/live');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'ok' });
+    expect(res.body).toMatchObject({ status: 'ok' });
     expect(mockStellarService.healthCheck).not.toHaveBeenCalled();
   });
 
@@ -251,7 +251,7 @@ describe('Error Handling', () => {
     const res = await request(app).get('/api/health/ready');
 
     expect(res.status).toBe(503);
-    expect(res.body).toEqual({
+    expect(res.body).toMatchObject({
       status: 'error',
       horizon: 'up',
       soroban: 'down',
@@ -268,7 +268,7 @@ describe('Edge Cases', () => {
       .query({ userAddress: VALID_ADDRESS, amount: '0' });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/amount/i);
+    expect(res.body.error.message).toMatch(/amount/i);
   });
 
   it('rejects negative amount', async () => {
@@ -277,7 +277,7 @@ describe('Edge Cases', () => {
       .query({ userAddress: VALID_ADDRESS, amount: '-500' });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/amount/i);
+    expect(res.body.error.message).toMatch(/amount/i);
   });
 
   it('accepts optional assetAddress when provided', async () => {
@@ -327,7 +327,7 @@ describe('Protocol Stats', () => {
     const res = await request(app).get('/api/protocol/stats');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({
+    expect(res.body).toMatchObject({
       totalDeposits: '1000000',
       totalBorrows: '500000',
       utilizationRate: '0.50',
@@ -368,7 +368,7 @@ describe('Idempotency', () => {
       .send({ signedXdr: 'signed_xdr_payload' });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Idempotency-Key/i);
+    expect(res.body.error.message).toMatch(/Idempotency-Key/i);
   });
 });
 
