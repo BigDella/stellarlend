@@ -39,6 +39,15 @@ members = [
   "contracts/referral-program",
   "contracts/token-adapter",
   "contracts/compliance",
+  "contracts/leveraged-yield",
+  "contracts/position-manager",
+  "contracts/principal-token",
+  "contracts/yield-token",
+  "contracts/yield-splitter",
+  "contracts/vault-share",
+  "contracts/auto-compound-vault",
+  "contracts/pool-interfaces",
+  "contracts/yield-router",
 ]
 exclude = [
   "fuzz",
