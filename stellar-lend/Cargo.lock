@@ -1477,7 +1477,7 @@ version = "0.1.0"
 dependencies = [
  "lending-types",
  "soroban-sdk",
- "test-utils",
+ "stellarlend-safe-math",
 ]
 
 [[package]]

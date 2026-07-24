@@ -1,5 +1,6 @@
-use soroban_sdk::Env;
+use soroban_sdk::{contracttype, Env};
 
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct PrecisionLoss {
     pub operation: i128,

@@ -21,6 +21,8 @@ import zkProofRoutes from './routes/zkProof.routes';
 import verificationRoutes from './routes/verification.routes';
 import configRoutes from './routes/config.routes';
 import analyticsRoutes from './routes/analytics.routes';
+import ratesRoutes from './routes/rates.routes';
+import crossProtocolRoutes from './routes/crossProtocol.routes';
 import developerRoutes from './routes/developer.routes';
 import mevRoutes from './routes/mev.routes';
 import reputationRoutes from './routes/reputation.routes';
@@ -35,10 +37,7 @@ import { errorHandler } from './middleware/errorHandler';
 import { idempotencyMiddleware } from './middleware/idempotency';
 import { resetSensitiveRateLimits, sensitiveOperationRateLimiter } from './middleware/rate-limit';
 import { swaggerSpec, versionListHandler, v1Spec } from './config/swagger';
-import {
-  versionMiddleware,
-  legacyCompatibilityMiddleware,
-} from './middleware/versioning';
+import { versionMiddleware, legacyCompatibilityMiddleware } from './middleware/versioning';
 import logger from './utils/logger';
 import { requestIdMiddleware } from './middleware/requestId';
 import { requestLogger } from './middleware/requestLogger';
@@ -198,6 +197,8 @@ app.use('/api/zk', legacySecurityCompat, zkProofRoutes);
 app.use('/api/verification', legacySecurityCompat, verificationRoutes);
 app.use('/api/config', legacySystemCompat, configRoutes);
 app.use('/api/analytics', legacySystemCompat, analyticsRoutes);
+app.use('/api/rates', legacySystemCompat, ratesRoutes);
+app.use('/api/cross-protocol', legacySystemCompat, crossProtocolRoutes);
 app.use('/api/mev', legacySecurityCompat, mevRoutes);
 app.use('/api/reputation', reputationRoutes);
 app.use('/api/social', socialRoutes);

@@ -106,4 +106,83 @@ router.get('/summary', analyticsController.analyticsSummary);
  */
 router.get('/export', analyticsController.analyticsExport);
 
+/**
+ * @openapi
+ * /analytics/rate-volatility:
+ *   get:
+ *     summary: Rolling standard deviation of deposit/borrow APY
+ *     tags:
+ *       - Analytics
+ *     parameters:
+ *       - in: query
+ *         name: timeRange
+ *         schema:
+ *           type: string
+ *           enum: [1d, 7d, 30d, 1y]
+ *           default: 7d
+ *       - in: query
+ *         name: poolAddress
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: windowSize
+ *         schema:
+ *           type: integer
+ *           default: 10
+ */
+router.get('/rate-volatility', analyticsController.rateVolatility);
+
+/**
+ * @openapi
+ * /analytics/weighted-average-rates:
+ *   get:
+ *     summary: Weighted average APY bucketed by day/week/month
+ *     tags:
+ *       - Analytics
+ *     parameters:
+ *       - in: query
+ *         name: timeRange
+ *         schema:
+ *           type: string
+ *           enum: [1d, 7d, 30d, 1y]
+ *           default: 30d
+ *       - in: query
+ *         name: poolAddress
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: granularity
+ *         schema:
+ *           type: string
+ *           enum: [hourly, daily, weekly, monthly]
+ *           default: daily
+ */
+router.get('/weighted-average-rates', analyticsController.weightedAverageRates);
+
+/**
+ * @openapi
+ * /analytics/rate-change-events:
+ *   get:
+ *     summary: Detected material borrow-rate change events
+ *     tags:
+ *       - Analytics
+ *     parameters:
+ *       - in: query
+ *         name: timeRange
+ *         schema:
+ *           type: string
+ *           enum: [1d, 7d, 30d, 1y]
+ *           default: 7d
+ *       - in: query
+ *         name: poolAddress
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: thresholdBps
+ *         schema:
+ *           type: integer
+ *           default: 10
+ */
+router.get('/rate-change-events', analyticsController.rateChangeEvents);
+
 export default router;

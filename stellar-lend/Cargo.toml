@@ -40,7 +40,12 @@ members = [
   "contracts/token-adapter",
   "contracts/compliance",
 ]
-exclude = ["fuzz", "formal-verification/safe-math-proofs"]
+exclude = [
+  "fuzz",
+  "formal-verification/safe-math-proofs",
+  "formal-verification/interest-rate-model-proofs",
+  "formal-verification/liquidation-math-proofs",
+]
 
 [workspace.lints.rust]
 

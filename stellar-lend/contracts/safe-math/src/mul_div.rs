@@ -26,7 +26,7 @@ pub fn mul_div_round_up(
     let b256 = I256::from_i128(env, b);
     let d256 = I256::from_i128(env, denominator);
     let product = a256.mul(&b256);
-    let remainder = product.rem(&d256);
+    let remainder = product.rem_euclid(&d256);
     let result = product.div(&d256);
     let zero = I256::from_i128(env, 0);
     if remainder > zero {

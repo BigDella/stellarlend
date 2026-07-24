@@ -10,5 +10,10 @@ description = "Kani proof harnesses for the StellarLend safe-math library"
 [dependencies]
 stellarlend-safe-math = { path = "../../contracts/safe-math" }
 
-[dev-dependencies]
-kani = { version = "0.55", optional = true }
+# No `kani` crate dependency is declared here: the `cargo kani` toolchain
+# injects the `kani` crate (and the `kani` cfg) into its own sysroot
+# automatically, so listing it in Cargo.toml is unnecessary and — because
+# the real proof-harness crate isn't published to crates.io under that
+# name/version — actively breaks plain `cargo build`/`cargo test` dependency
+# resolution. All Kani-only code below is behind `#[cfg(kani)]`, which is
+# simply absent (and thus never compiled) outside `cargo kani` runs.

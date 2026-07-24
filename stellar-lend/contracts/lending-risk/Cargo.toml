@@ -9,9 +9,7 @@ crate-type = ["lib"]
 [dependencies]
 soroban-sdk = { workspace = true }
 lending-types = { path = "../lending-types" }
-
-[dev-dependencies]
-test-utils = { path = "../test-utils" }
+stellarlend-safe-math = { workspace = true }
 
 [features]
 default = []
