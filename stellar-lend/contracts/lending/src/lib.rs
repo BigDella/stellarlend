@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, Address, Bytes, Env, Val, Vec};
+use soroban_sdk::{contract, contractimpl, crypto::Hash, Address, Bytes, Env, Val, Vec};
 
 mod borrow;
 mod deposit;
@@ -70,6 +70,7 @@ pub mod rate_guard;
 pub mod sandwich_protection;
 pub mod simulation_cache;
 pub mod batch_view;
+pub mod yield_curve;
 
 use interest::InterestCacheError;
 use lazy::{LazyError, LazyField};
@@ -864,7 +865,7 @@ impl LendingContract {
         asset: Address,
         amount: i128,
         operation_type: u32,
-    ) -> Result<soroban_sdk::Hash, SandwichError> {
+    ) -> Result<Hash, SandwichError> {
         let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
             .map_err(|_| SandwichError::Overflow)?;
         sandwich_protection::commit_transaction(&env, user, asset, amount, operation_type)
@@ -874,7 +875,7 @@ impl LendingContract {
     pub fn reveal_sandwich_transaction(
         env: Env,
         user: Address,
-        commit_hash: soroban_sdk::Hash,
+        commit_hash: Hash,
         nonce: u64,
     ) -> Result<(), SandwichError> {
         let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)

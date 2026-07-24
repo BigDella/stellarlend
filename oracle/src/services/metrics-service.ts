@@ -69,6 +69,14 @@ export class MetricsService {
       }
     });
 
+    this.server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        logger.warn(`Metrics server could not bind to port ${this.port} (already in use)`);
+      } else {
+        logger.error('Metrics server error', { error: err.message });
+      }
+    });
+
     this.server.listen(this.port, () => {
       logger.info(`Metrics server listening on port ${this.port}`);
     });
@@ -77,12 +85,18 @@ export class MetricsService {
   /**
    * Stop the metrics HTTP server
    */
-  stop(): void {
-    if (this.server) {
-      this.server.close();
-      this.server = undefined;
-      logger.info('Metrics server stopped');
-    }
+  stop(): Promise<void> {
+    return new Promise((resolve) => {
+      if (this.server) {
+        this.server.close(() => {
+          this.server = undefined;
+          logger.info('Metrics server stopped');
+          resolve();
+        });
+      } else {
+        resolve();
+      }
+    });
   }
 
   /**

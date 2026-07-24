@@ -18,21 +18,21 @@ describe('MetricsService', () => {
     metricsService = createMetricsService(testPort);
   });
 
-  afterEach(() => {
-    metricsService.stop();
+  afterEach(async () => {
+    await metricsService.stop();
   });
 
   describe('constructor and initialization', () => {
-    it('should create a metrics service with default port', () => {
+    it('should create a metrics service with default port', async () => {
       const defaultService = createMetricsService();
       expect(defaultService).toBeDefined();
-      defaultService.stop();
+      await defaultService.stop();
     });
 
-    it('should create a metrics service with custom port', () => {
+    it('should create a metrics service with custom port', async () => {
       const customService = createMetricsService(4000);
       expect(customService).toBeDefined();
-      customService.stop();
+      await customService.stop();
     });
 
     it('should initialize with zero counts', () => {
@@ -96,13 +96,13 @@ describe('MetricsService', () => {
   });
 
   describe('metrics endpoint', () => {
-    it('should start and stop the HTTP server', () => {
+    it('should start and stop the HTTP server', async () => {
       metricsService.start();
-      metricsService.stop();
+      await metricsService.stop();
       // If we get here without error, the test passes
     });
 
-    it('should return metrics on GET /metrics', (done) => {
+    it('should return metrics on GET /metrics', async () => {
       metricsService.start();
 
       // Set up some test data
@@ -113,59 +113,73 @@ describe('MetricsService', () => {
       metricsService.updateAssetPrice('XLM', 0.12);
 
       // Make HTTP request
-      const req = http.get(`http://localhost:${testPort}/metrics`, (res) => {
-        let data = '';
+      await new Promise<void>((resolve, reject) => {
+        const req = http.get(`http://localhost:${testPort}/metrics`, (res) => {
+          let data = '';
 
-        res.on('data', (chunk) => {
-          data += chunk;
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+
+          res.on('end', () => {
+            try {
+              expect(res.statusCode).toBe(200);
+              expect(res.headers['content-type']).toBe('application/json');
+
+              const metrics = JSON.parse(data);
+              expect(metrics.uptime).toBeGreaterThanOrEqual(0);
+              expect(metrics.updateCount).toBe(2);
+              expect(metrics.errorCount).toBe(1);
+              expect(metrics.providers.binance).toBe('healthy');
+              expect(metrics.assets.XLM).toBeDefined();
+              expect(metrics.assets.XLM.price).toBe(0.12);
+
+              metricsService.stop();
+              resolve();
+            } catch (e) {
+              metricsService.stop();
+              reject(e);
+            }
+          });
         });
 
-        res.on('end', () => {
-          expect(res.statusCode).toBe(200);
-          expect(res.headers['content-type']).toBe('application/json');
-
-          const metrics = JSON.parse(data);
-          expect(metrics.uptime).toBeGreaterThanOrEqual(0);
-          expect(metrics.updateCount).toBe(2);
-          expect(metrics.errorCount).toBe(1);
-          expect(metrics.providers.binance).toBe('healthy');
-          expect(metrics.assets.XLM).toBeDefined();
-          expect(metrics.assets.XLM.price).toBe(0.12);
-
+        req.on('error', (err) => {
           metricsService.stop();
-          done();
+          reject(err);
         });
-      });
-
-      req.on('error', (err) => {
-        metricsService.stop();
-        done(err);
       });
     });
 
-    it('should return 404 for non-metrics endpoints', (done) => {
+    it('should return 404 for non-metrics endpoints', async () => {
       metricsService.start();
 
-      const req = http.get(`http://localhost:${testPort}/other`, (res) => {
-        let data = '';
+      await new Promise<void>((resolve, reject) => {
+        const req = http.get(`http://localhost:${testPort}/other`, (res) => {
+          let data = '';
 
-        res.on('data', (chunk) => {
-          data += chunk;
+          res.on('data', (chunk) => {
+            data += chunk;
+          });
+
+          res.on('end', () => {
+            try {
+              expect(res.statusCode).toBe(404);
+              const body = JSON.parse(data);
+              expect(body.error).toBe('Not found');
+
+              metricsService.stop();
+              resolve();
+            } catch (e) {
+              metricsService.stop();
+              reject(e);
+            }
+          });
         });
 
-        res.on('end', () => {
-          expect(res.statusCode).toBe(404);
-          const body = JSON.parse(data);
-          expect(body.error).toBe('Not found');
-
+        req.on('error', (err) => {
           metricsService.stop();
-          done();
+          reject(err);
         });
-      });
-
-      req.on('error', (err) => {
-        metricsService.stop();
-        done(err);
       });
     });
   });

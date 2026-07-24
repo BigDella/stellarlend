@@ -31,6 +31,10 @@ import notificationRoutes from './routes/notification.routes';
 import disputeRoutes from './routes/dispute.routes';
 import creditRoutes from './routes/credit.routes';
 import nonceRoutes from './routes/nonce.routes';
+import yieldCurveRoutes from './routes/yieldCurve.routes';
+import rateForecastRoutes from './routes/rateForecast.routes';
+import liquidationDashboardRoutes from './routes/liquidationDashboard.routes';
+import opportunityExplorerRoutes from './routes/opportunityExplorer.routes';
 
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
@@ -206,6 +210,10 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/api/credit', creditRoutes);
 app.use('/api/nonce', nonceRoutes);
+app.use('/api/yield-curve', yieldCurveRoutes);
+app.use('/api/rates', rateForecastRoutes);
+app.use('/api/liquidations', liquidationDashboardRoutes);
+app.use('/api/liquidations', opportunityExplorerRoutes);
 
 app.use(errorHandler);
 

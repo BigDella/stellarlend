@@ -152,11 +152,13 @@ export class OracleService {
   /**
    * Stop the oracle service
    */
-  stop(): void {
+  async stop(): Promise<void> {
     if (!this.isRunning) {
       logger.warn('Oracle service is not running');
       return;
     }
+
+    this.isRunning = false;
 
     if (this.intervalId) {
       clearInterval(this.intervalId);
@@ -164,9 +166,8 @@ export class OracleService {
     }
 
     // Stop metrics server
-    this.metricsService.stop();
+    await this.metricsService.stop();
 
-    this.isRunning = false;
     logger.info('Oracle service stopped');
   }
 

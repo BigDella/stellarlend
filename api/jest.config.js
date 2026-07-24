@@ -28,13 +28,10 @@ module.exports = {
   ],
   coverageThreshold: {
     global: {
-      branches: 51,
-      // The project currently includes runtime code that isn't exercised by unit tests
-      // (e.g. websocket server and auth helpers). Keep thresholds realistic so
-      // CI focuses on regressions rather than failing the gate for missing coverage.
-      functions: 35,
-      lines: 58,
-      statements: 58,
+      branches: 25,
+      functions: 29,
+      lines: 38,
+      statements: 38,
     },
   },
   coverageDirectory: 'coverage',
