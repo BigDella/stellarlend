@@ -15,14 +15,11 @@ mod tests {
         let name = String::from_slice(&env, "testname");
         let address = user.clone();
 
-        // Initialize
-        client.initialize(&admin, &String::from_slice(&env, "3600"), &365);
+        client.initialize(&admin, &3600u64, &365u64);
 
-        // Register name
         let result = client.register_name(&name, &address);
         assert!(result.is_ok());
 
-        // Resolve name
         let resolved = client.resolve_name(&name);
         assert_eq!(resolved.unwrap(), address);
     }
@@ -36,12 +33,11 @@ mod tests {
         let admin = env.mock_all_auths();
         let user = env.mock_all_auths();
 
-        client.initialize(&admin, &String::from_slice(&env, "3600"), &365);
+        client.initialize(&admin, &3600u64, &365u64);
 
         let name = String::from_slice(&env, "expiring");
         client.register_name(&name, &user);
 
-        // Check if expired (should be false immediately after registration)
         let is_expired = client.is_name_expired(&name);
         assert!(!is_expired.unwrap());
     }
@@ -53,7 +49,7 @@ mod tests {
         let client = SNSIntegrationClient::new(&env, &contract_id);
 
         let admin = env.mock_all_auths();
-        client.initialize(&admin, &String::from_slice(&env, "3600"), &365);
+        client.initialize(&admin, &3600u64, &365u64);
 
         let empty_name = String::from_slice(&env, "");
         let user = env.mock_all_auths();
@@ -71,12 +67,11 @@ mod tests {
         let admin = env.mock_all_auths();
         let user = env.mock_all_auths();
 
-        client.initialize(&admin, &String::from_slice(&env, "3600"), &365);
+        client.initialize(&admin, &3600u64, &365u64);
 
         let name = String::from_slice(&env, "renew");
         client.register_name(&name, &user);
 
-        // Renew name
         let result = client.renew_name(&name);
         assert!(result.is_ok());
     }
@@ -91,7 +86,7 @@ mod tests {
         let user1 = env.mock_all_auths();
         let user2 = env.mock_all_auths();
 
-        client.initialize(&admin, &String::from_slice(&env, "3600"), &365);
+        client.initialize(&admin, &3600u64, &365u64);
 
         let name1 = String::from_slice(&env, "user1");
         let name2 = String::from_slice(&env, "user2");
@@ -99,8 +94,6 @@ mod tests {
         client.register_name(&name1, &user1);
         client.register_name(&name2, &user2);
 
-        // Test batch resolution would require Vec implementation
-        // Simplified test here
         let result1 = client.resolve_name(&name1);
         let result2 = client.resolve_name(&name2);
 
@@ -115,9 +108,41 @@ mod tests {
         let client = SNSIntegrationClient::new(&env, &contract_id);
 
         let admin = env.mock_all_auths();
-        client.initialize(&admin, &String::from_slice(&env, "3600"), &365);
+        client.initialize(&admin, &3600u64, &365u64);
 
         let analytics = client.get_analytics();
         assert!(analytics.is_ok());
+    }
+
+    #[test]
+    fn test_name_not_found() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, SNSIntegration);
+        let client = SNSIntegrationClient::new(&env, &contract_id);
+
+        let admin = env.mock_all_auths();
+        client.initialize(&admin, &3600u64, &365u64);
+
+        let name = String::from_slice(&env, "nonexistent");
+        let result = client.resolve_name(&name);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_record() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, SNSIntegration);
+        let client = SNSIntegrationClient::new(&env, &contract_id);
+
+        let admin = env.mock_all_auths();
+        let user = env.mock_all_auths();
+
+        client.initialize(&admin, &3600u64, &365u64);
+
+        let name = String::from_slice(&env, "alice");
+        client.register_name(&name, &user);
+
+        let record = client.get_record(&name);
+        assert!(record.is_ok());
     }
 }

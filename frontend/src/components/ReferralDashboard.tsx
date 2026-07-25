@@ -27,15 +27,19 @@ export const ReferralDashboard: React.FC = () => {
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const response = await fetch('/api/referral/stats');
-        const data: ReferralStats = await response.json();
-        setStats(data);
+        const response = await fetch(`/api/referral/stats?userAddress=current`);
+        const data = await response.json();
+        if (data.success) {
+          setStats(data.data);
 
-        const funnelResponse = await fetch('/api/referral/funnel');
-        const funnelData: ConversionFunnel = await funnelResponse.json();
-        setFunnel(funnelData);
+          const funnelResponse = await fetch(`/api/referral/funnel?userAddress=current`);
+          const funnelData = await funnelResponse.json();
+          if (funnelData.success) {
+            setFunnel(funnelData.data);
+          }
 
-        setReferralLink(`https://stellarlend.com?ref=${data.code}`);
+          setReferralLink(data.data.code ? `https://stellarlend.com?ref=${data.data.code}` : '');
+        }
         setIsLoading(false);
       } catch (error) {
         console.error('Failed to fetch referral stats:', error);
@@ -61,15 +65,35 @@ export const ReferralDashboard: React.FC = () => {
     if (!stats || stats.claimable <= 0) return;
 
     try {
-      const response = await fetch('/api/referral/claim', { method: 'POST' });
+      const response = await fetch('/api/referral/claim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userAddress: 'current' }),
+      });
       if (response.ok) {
-        // Refresh stats
-        const newResponse = await fetch('/api/referral/stats');
-        const newData: ReferralStats = await newResponse.json();
-        setStats(newData);
+        const newResponse = await fetch(`/api/referral/stats?userAddress=current`);
+        const newData = await newResponse.json();
+        if (newData.success) setStats(newData.data);
       }
     } catch (error) {
       console.error('Claim failed:', error);
+    }
+  };
+
+  const handleGenerateCode = async () => {
+    try {
+      const response = await fetch('/api/referral/generate-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userAddress: 'current' }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setReferralLink(data.data.link);
+        setStats(prev => prev ? { ...prev, code: data.data.code } : null);
+      }
+    } catch (error) {
+      console.error('Failed to generate code:', error);
     }
   };
 
@@ -120,13 +144,18 @@ export const ReferralDashboard: React.FC = () => {
             <div style={styles.referralLink}>
               <input
                 type="text"
-                value={referralLink}
+                value={referralLink || 'No code generated yet'}
                 readOnly
                 style={styles.linkInput}
               />
               <button onClick={copyToClipboard} style={styles.copyButton}>
                 Copy
               </button>
+              {!referralLink && (
+                <button onClick={handleGenerateCode} style={{ ...styles.copyButton, backgroundColor: '#17a2b8' }}>
+                  Generate Code
+                </button>
+              )}
             </div>
           </div>
 

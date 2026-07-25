@@ -37,6 +37,10 @@ import rateForecastRoutes from './routes/rateForecast.routes';
 import liquidationDashboardRoutes from './routes/liquidationDashboard.routes';
 import opportunityExplorerRoutes from './routes/opportunityExplorer.routes';
 import { treasuryRoutes } from './routes/treasury.routes';
+import referralRoutes from './routes/referral.routes';
+import snsRoutes from './routes/sns.routes';
+import simulatorRoutes from './routes/simulator.routes';
+import emergencyRoutes from './routes/emergency.routes';
 
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
@@ -218,6 +222,10 @@ app.use('/api/rates', rateForecastRoutes);
 app.use('/api/liquidations', liquidationDashboardRoutes);
 app.use('/api/liquidations', opportunityExplorerRoutes);
 app.use('/api/treasury', treasuryRoutes);
+app.use('/api/referral', referralRoutes);
+app.use('/api/sns', snsRoutes);
+app.use('/api/simulator', simulatorRoutes);
+app.use('/api/emergency', emergencyRoutes);
 
 app.use(errorHandler);
 

@@ -30,6 +30,10 @@ import disputeRoutes from '../dispute.routes';
 import creditRoutes from '../credit.routes';
 import complianceV1Routes from './compliance';
 import riskV1Routes from './risk';
+import referralRoutes from '../referral.routes';
+import snsRoutes from '../sns.routes';
+import simulatorRoutes from '../simulator.routes';
+import emergencyRoutes from '../emergency.routes';
 
 const router = Router();
 
@@ -46,5 +50,9 @@ router.use('/disputes', disputeRoutes);
 router.use('/credit', creditRoutes);
 router.use('/compliance', complianceV1Routes);
 router.use('/risk', riskV1Routes);
+router.use('/referral', referralRoutes);
+router.use('/sns', snsRoutes);
+router.use('/simulator', simulatorRoutes);
+router.use('/emergency', emergencyRoutes);
 
 export default router;
