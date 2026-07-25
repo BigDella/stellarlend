@@ -48,6 +48,8 @@ members = [
   "contracts/auto-compound-vault",
   "contracts/pool-interfaces",
   "contracts/yield-router",
+  "contracts/dutch-auction",
+  "contracts/debt-token",
 ]
 exclude = [
   "fuzz",
