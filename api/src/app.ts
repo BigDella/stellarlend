@@ -44,6 +44,10 @@ import referralRoutes from './routes/referral.routes';
 import snsRoutes from './routes/sns.routes';
 import simulatorRoutes from './routes/simulator.routes';
 import emergencyRoutes from './routes/emergency.routes';
+import liquidationProfitCalculatorRoutes from './routes/liquidationProfitCalculator.routes';
+import tvlDecompositionRoutes from './routes/tvlDecomposition.routes';
+import userBehaviorAnalyticsRoutes from './routes/userBehaviorAnalytics.routes';
+import pnlRoutes from './routes/pnl.routes';
 
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
@@ -232,6 +236,10 @@ app.use('/api/referral', referralRoutes);
 app.use('/api/sns', snsRoutes);
 app.use('/api/simulator', simulatorRoutes);
 app.use('/api/emergency', emergencyRoutes);
+app.use('/api/liquidations', liquidationProfitCalculatorRoutes);
+app.use('/api/analytics/tvl', tvlDecompositionRoutes);
+app.use('/api/analytics/users', userBehaviorAnalyticsRoutes);
+app.use('/api/pnl', pnlRoutes);
 
 app.use(errorHandler);
 

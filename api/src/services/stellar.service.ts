@@ -126,6 +126,15 @@ function keypairFromSecret(secret: string): Keypair {
   }
 }
 
+/** Deterministic, non-cryptographic hash used to derive simulated values from an address string. */
+function simpleHash(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) & 0x7fffffff;
+  }
+  return hash;
+}
+
 export class StellarService {
   private horizonUrl: string;
   private sorobanRpcUrl: string;
@@ -869,7 +878,7 @@ export class StellarService {
     poolAddress: string,
     _timestamp: number
   ): Promise<{ utilizationRate: number; totalDeposits: string; totalBorrows: string }> {
-    const simVal = poolAddress ? parseInt(poolAddress.slice(-4), 16) % 100 : 50;
+    const simVal = poolAddress ? simpleHash(poolAddress) % 100 : 50;
     return {
       utilizationRate: simVal / 100,
       totalDeposits: (1000000n * BigInt(simVal + 50)).toString(),
