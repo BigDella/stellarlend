@@ -37,10 +37,6 @@ import rateForecastRoutes from './routes/rateForecast.routes';
 import liquidationDashboardRoutes from './routes/liquidationDashboard.routes';
 import opportunityExplorerRoutes from './routes/opportunityExplorer.routes';
 import { treasuryRoutes } from './routes/treasury.routes';
-import { treasuryDashboardRoutes } from './routes/treasury-dashboard.routes';
-import { treasuryRebalancerRoutes } from './routes/treasury-rebalancer.routes';
-import { treasuryYieldHarvesterRoutes } from './routes/treasury-yield-harvester.routes';
-import { protocolOwnedLiquidityRoutes } from './routes/protocol-owned-liquidity.routes';
 
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
@@ -222,10 +218,6 @@ app.use('/api/rates', rateForecastRoutes);
 app.use('/api/liquidations', liquidationDashboardRoutes);
 app.use('/api/liquidations', opportunityExplorerRoutes);
 app.use('/api/treasury', treasuryRoutes);
-app.use('/api/treasury/dashboard', treasuryDashboardRoutes);
-app.use('/api/treasury/rebalancer', treasuryRebalancerRoutes);
-app.use('/api/treasury/yield', treasuryYieldHarvesterRoutes);
-app.use('/api/treasury/pol', protocolOwnedLiquidityRoutes);
 
 app.use(errorHandler);
 
