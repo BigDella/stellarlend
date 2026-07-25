@@ -72,6 +72,10 @@ pub mod simulation_cache;
 pub mod batch_view;
 pub mod yield_curve;
 
+// Gas optimization & formal verification suite (issues #462–#465)
+mod gas_harness;
+pub mod spec;
+
 use interest::InterestCacheError;
 use lazy::{LazyError, LazyField};
 use liquidation::{LiquidationError, LiquidationPlan, PositionSnapshot};
