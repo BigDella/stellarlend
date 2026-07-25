@@ -5,6 +5,7 @@ import logger from './utils/logger';
 import { createPriceWebSocket } from './ws/priceWebSocket';
 import { createHealthWebSocket } from './ws/healthWebSocket';
 import { SubscriptionService } from './services/subscription.service';
+import { startRiskEngineScheduler } from './services/risk-engine';
 
 const PORT = config.server.port;
 
@@ -17,6 +18,9 @@ createHealthWebSocket(server);
 // Start subscription keeper for recurring operations
 const subscriptionService = new SubscriptionService();
 subscriptionService.startKeeper();
+
+// Start risk engine hourly recalculation scheduler
+startRiskEngineScheduler();
 
 server.listen(PORT, () => {
   logger.info(`StellarLend API server running on port ${PORT}`);

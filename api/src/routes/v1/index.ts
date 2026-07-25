@@ -29,6 +29,7 @@ import notificationRoutes from '../notification.routes';
 import disputeRoutes from '../dispute.routes';
 import creditRoutes from '../credit.routes';
 import complianceV1Routes from './compliance';
+import riskV1Routes from './risk';
 
 const router = Router();
 
@@ -44,5 +45,6 @@ router.use('/notifications', notificationRoutes);
 router.use('/disputes', disputeRoutes);
 router.use('/credit', creditRoutes);
 router.use('/compliance', complianceV1Routes);
+router.use('/risk', riskV1Routes);
 
 export default router;
