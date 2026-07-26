@@ -54,6 +54,9 @@ import liquidationProfitCalculatorRoutes from './routes/liquidationProfitCalcula
 import tvlDecompositionRoutes from './routes/tvlDecomposition.routes';
 import userBehaviorAnalyticsRoutes from './routes/userBehaviorAnalytics.routes';
 import pnlRoutes from './routes/pnl.routes';
+import insuranceRoutes from './routes/insurance.routes';
+import plannerRoutes from './routes/planner.routes';
+import feeTierRoutes from './routes/fee-tiers.routes';
 
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
@@ -249,6 +252,9 @@ app.use('/api/liquidations', liquidationProfitCalculatorRoutes);
 app.use('/api/analytics/tvl', tvlDecompositionRoutes);
 app.use('/api/analytics/users', userBehaviorAnalyticsRoutes);
 app.use('/api/pnl', pnlRoutes);
+app.use('/api/insurance', insuranceRoutes);
+app.use('/api/planner', plannerRoutes);
+app.use('/api/fee-tiers', feeTierRoutes);
 
 app.use(errorHandler);
 

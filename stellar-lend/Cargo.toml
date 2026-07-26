@@ -37,6 +37,7 @@ members = [
   "contracts/liquidation-strategy",
   "contracts/sns-integration",
   "contracts/referral-program",
+  "contracts/insurance-marketplace",
   "contracts/token-adapter",
   "contracts/compliance",
   "contracts/leveraged-yield",

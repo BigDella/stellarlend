@@ -4,6 +4,7 @@ use soroban_sdk::{contract, contractimpl, crypto::Hash, Address, Bytes, Env, Val
 mod borrow;
 mod deposit;
 mod events;
+pub mod fee_tiers;
 mod flash_loan;
 mod pause;
 mod reentrancy;
