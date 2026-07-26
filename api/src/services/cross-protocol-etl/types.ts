@@ -63,3 +63,64 @@ export interface LeaderboardEntry {
   metricValue: number;
   tvlUsd: number;
 }
+
+/** Per-protocol metrics for a single asset, for side-by-side comparison. */
+export interface AssetComparisonEntry {
+  protocol: string;
+  displayName: string;
+  supplyApy: number;
+  borrowApy: number;
+  /** borrowApy - supplyApy, in basis points — the protocol's effective spread. */
+  spreadBps: number;
+  tvlUsd: number;
+  utilizationRate: number;
+}
+
+export interface AssetComparisonResult {
+  asset: string;
+  entries: AssetComparisonEntry[];
+  refreshedAt: string;
+}
+
+export interface MarketShareHistoryPoint {
+  timestamp: string;
+  shares: ProtocolMarketShare[];
+}
+
+export interface PositioningMetricComparison {
+  metric: string;
+  stellarLendValue: number;
+  peerAverage: number;
+  /** Positive = StellarLend ahead of the peer average for this metric. */
+  deltaVsPeerAverage: number;
+  favorable: boolean;
+}
+
+export interface PositioningReport {
+  asOf: string;
+  strengths: string[];
+  weaknesses: string[];
+  metrics: PositioningMetricComparison[];
+}
+
+export interface BenchmarkScoreEntry {
+  protocol: string;
+  displayName: string;
+  /** 0-100, higher is better; percentile rank averaged across tracked metrics. */
+  score: number;
+  rank: number;
+}
+
+export interface BenchmarkScoreResult {
+  entries: BenchmarkScoreEntry[];
+  asOf: string;
+}
+
+export interface WeeklyDigest {
+  generatedAt: string;
+  stellarLendMarketSharePct: number;
+  stellarLendMarketShareDeltaPct: number;
+  stellarLendRank: number;
+  topMoversByTvl: Array<{ protocol: string; tvlUsd: number }>;
+  summary: string;
+}

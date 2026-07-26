@@ -29,6 +29,7 @@ import {
 } from '../../types/gas';
 import { StellarService } from '../stellar.service';
 import { redisCacheService } from '../redisCache.service';
+import { gasUsageAnalyticsService } from '../analytics/gasUsageAnalytics.service';
 import logger from '../../utils/logger';
 import { LendingOperation } from '../../types';
 
@@ -405,7 +406,7 @@ export class GasEstimatorService {
     };
 
     this.accuracyMetrics.push(metric);
-    
+
     // Keep only last 1000 metrics
     if (this.accuracyMetrics.length > 1000) {
       this.accuracyMetrics.shift();
@@ -414,6 +415,15 @@ export class GasEstimatorService {
     // Cache metric
     const cacheKey = redisCacheService.buildKey('gas', `accuracy:${txHash}`);
     await redisCacheService.set(cacheKey, metric, 86400 * 7); // 7 days
+
+    // Feed the observed cost into gas usage analytics (issue #483) so
+    // per-function stats/anomaly detection reflect real transaction data.
+    gasUsageAnalyticsService.recordSample({
+      functionName: operation,
+      gasUsed: Number(actual),
+      timestamp: Date.now(),
+      txHash,
+    });
 
     logger.info('Gas accuracy recorded:', { operation, errorPercent: `${errorPercent}%` });
   }

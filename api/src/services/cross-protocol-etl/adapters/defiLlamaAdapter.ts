@@ -22,6 +22,7 @@ const TRACKED_PROJECTS: Record<string, string> = {
   'compound-v3': 'Compound V3',
   'morpho-blue': 'Morpho Blue',
   spark: 'Spark',
+  exactly: 'Exactly',
 };
 
 /**

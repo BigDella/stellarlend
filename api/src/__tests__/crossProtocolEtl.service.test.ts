@@ -3,6 +3,13 @@ import {
   getCrossProtocolComparison,
   computeMarketShare,
   getLeaderboard,
+  getAssetComparison,
+  getFeeComparison,
+  getLiquidationParamsComparison,
+  getMarketShareHistory,
+  getPositioningReport,
+  getBenchmarkScore,
+  getWeeklyDigest,
 } from '../services/cross-protocol-etl/etl.service';
 import { ProtocolAdapter, StandardizedProtocolMetrics } from '../services/cross-protocol-etl/types';
 import { redisCacheService } from '../services/redisCache.service';
@@ -160,6 +167,122 @@ describe('cross-protocol-etl.service', () => {
       ];
       const board = await getLeaderboard('tvlUsd', 2, adapters);
       expect(board).toHaveLength(2);
+    });
+  });
+
+  describe('getAssetComparison', () => {
+    it('returns only entries for the requested asset, sorted by TVL descending', async () => {
+      const adapters = [
+        fakeAdapter('a', [
+          metric({ protocol: 'a', asset: 'USDC', tvlUsd: 100 }),
+          metric({ protocol: 'a', asset: 'ETH', tvlUsd: 999 }),
+        ]),
+        fakeAdapter('b', [metric({ protocol: 'b', asset: 'USDC', tvlUsd: 500 })]),
+      ];
+      const result = await getAssetComparison('usdc', adapters);
+      expect(result.asset).toBe('USDC');
+      expect(result.entries.map((e) => e.protocol)).toEqual(['b', 'a']);
+    });
+
+    it('computes spreadBps as (borrowApy - supplyApy) in basis points', async () => {
+      const adapters = [
+        fakeAdapter('a', [metric({ protocol: 'a', asset: 'USDC', supplyApy: 0.03, borrowApy: 0.05 })]),
+      ];
+      const result = await getAssetComparison('USDC', adapters);
+      expect(result.entries[0]!.spreadBps).toBe(200);
+    });
+  });
+
+  describe('getFeeComparison', () => {
+    it('includes every curated protocol with a live-computed spread', async () => {
+      const adapters = [
+        fakeAdapter('stellarlend', [
+          metric({ protocol: 'stellarlend', asset: 'USDC', supplyApy: 0.03, borrowApy: 0.06 }),
+        ]),
+      ];
+      const result = await getFeeComparison(adapters);
+      const stellarLend = result.find((r) => r.protocol === 'stellarlend');
+      expect(stellarLend).toBeDefined();
+      expect(stellarLend!.reserveFactorBps).toBe(1000);
+      expect(stellarLend!.avgSpreadBps).toBe(300);
+      // Peers with no live data this refresh still appear, with a 0 live spread.
+      expect(result.find((r) => r.protocol === 'aave-v3')).toBeDefined();
+    });
+  });
+
+  describe('getLiquidationParamsComparison', () => {
+    it('returns StellarLend contract defaults alongside curated peer references', () => {
+      const params = getLiquidationParamsComparison();
+      const stellarLend = params.find((p) => p.protocol === 'stellarlend');
+      expect(stellarLend).toMatchObject({
+        liquidationThresholdBps: 10500,
+        liquidationBonusBps: 1000,
+        closeFactorBps: 5000,
+        thresholdConvention: 'min-collateral-ratio',
+      });
+      expect(params.length).toBeGreaterThanOrEqual(5);
+    });
+  });
+
+  describe('getMarketShareHistory', () => {
+    it('appends a snapshot on every fresh (non-cached) refresh', async () => {
+      const before = getMarketShareHistory().length;
+      await getCrossProtocolComparison([fakeAdapter('h1', [metric({ protocol: 'h1' })])]);
+      redisCacheService.clearAllForTests();
+      await getCrossProtocolComparison([fakeAdapter('h2', [metric({ protocol: 'h2' })])]);
+      const after = getMarketShareHistory().length;
+      expect(after).toBe(before + 2);
+    });
+  });
+
+  describe('getPositioningReport', () => {
+    it('flags a metric where StellarLend meaningfully beats the peer average as a strength', async () => {
+      const adapters = [
+        fakeAdapter('stellarlend', [
+          metric({ protocol: 'stellarlend', asset: 'USDC', supplyApy: 0.1, borrowApy: 0.05, tvlUsd: 1_000_000 }),
+        ]),
+        fakeAdapter('peer', [
+          metric({ protocol: 'peer', asset: 'USDC', supplyApy: 0.03, borrowApy: 0.05, tvlUsd: 1_000_000 }),
+        ]),
+      ];
+      const report = await getPositioningReport(adapters);
+      expect(report.strengths.some((s) => s.includes('supplyApy'))).toBe(true);
+    });
+
+    it('returns an empty report when StellarLend or peer data is absent', async () => {
+      const report = await getPositioningReport([fakeAdapter('onlypeer', [metric({ protocol: 'onlypeer' })])]);
+      expect(report.strengths).toEqual([]);
+      expect(report.weaknesses).toEqual([]);
+      expect(report.metrics).toEqual([]);
+    });
+  });
+
+  describe('getBenchmarkScore', () => {
+    it('ranks the protocol with the best combined metrics first', async () => {
+      const adapters = [
+        fakeAdapter('best', [
+          metric({ protocol: 'best', supplyApy: 0.1, borrowApy: 0.02, tvlUsd: 10_000_000 }),
+        ]),
+        fakeAdapter('worst', [
+          metric({ protocol: 'worst', supplyApy: 0.01, borrowApy: 0.2, tvlUsd: 1 }),
+        ]),
+      ];
+      const result = await getBenchmarkScore(adapters);
+      expect(result.entries[0]!.protocol).toBe('best');
+      expect(result.entries[0]!.rank).toBe(1);
+      expect(result.entries[0]!.score).toBeGreaterThan(result.entries[1]!.score);
+    });
+  });
+
+  describe('getWeeklyDigest', () => {
+    it('summarizes current market share with insufficient-history messaging on first run', async () => {
+      const digest = await getWeeklyDigest([
+        fakeAdapter('stellarlend', [metric({ protocol: 'stellarlend', tvlUsd: 500 })]),
+        fakeAdapter('peer', [metric({ protocol: 'peer', tvlUsd: 500 })]),
+      ]);
+      expect(digest.stellarLendMarketSharePct).toBeCloseTo(50);
+      expect(digest.summary).toContain('Insufficient history');
+      expect(digest.topMoversByTvl.length).toBeGreaterThan(0);
     });
   });
 });
