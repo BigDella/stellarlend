@@ -1,4 +1,4 @@
-//! # Batched Multi-Pool Health Check (issue #635)
+//! # Batched Multi-Pool Health Check (issue #635, re-filed as #601)
 //!
 //! Gas-efficient batch view function that reads multiple pool positions and
 //! computes health factors in a single call, avoiding N separate cross-contract

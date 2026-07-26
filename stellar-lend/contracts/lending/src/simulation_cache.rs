@@ -1,4 +1,4 @@
-//! # Transaction Simulation Cache (issue #636)
+//! # Transaction Simulation Cache (issue #636, re-filed as #602)
 //!
 //! Block-scoped LRU cache for common pool operation simulations.
 //! Identical simulation parameters within the same block reuse cached results,

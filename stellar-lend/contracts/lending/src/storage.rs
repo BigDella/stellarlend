@@ -1,4 +1,4 @@
-//! # Packed Pool Configuration Storage (issue #633)
+//! # Packed Pool Configuration Storage (issue #633, re-filed as #599)
 //!
 //! Each pool-configuration parameter previously occupied its own persistent
 //! slot, so a pool paid Soroban storage rent on five-plus separate entries.

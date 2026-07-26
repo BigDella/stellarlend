@@ -1,4 +1,4 @@
-//! # Lazy Pool-State Initialisation (issue #634)
+//! # Lazy Pool-State Initialisation (issue #634, re-filed as #600)
 //!
 //! Creating a pool previously initialised *every* state field up front, paying
 //! storage rent for slots that aren't touched until much later (or ever). This
