@@ -2900,6 +2900,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarlend-debt-token"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "soroban-token-sdk",
+]
+
+[[package]]
 name = "stellarlend-dispute-resolution"
 version = "0.1.0"
 dependencies = [
@@ -2939,6 +2947,14 @@ dependencies = [
 name = "stellarlend-margin"
 version = "0.1.0"
 dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "stellarlend-math"
+version = "0.1.0"
+dependencies = [
+ "proptest",
  "soroban-sdk",
 ]
 

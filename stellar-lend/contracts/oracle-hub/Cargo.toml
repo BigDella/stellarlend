@@ -2,6 +2,7 @@
 name = "oracle-hub"
 version = "0.1.0"
 edition = "2021"
+description = "Centralized OracleHub contract with feed prioritization, median aggregation, outlier rejection, and emergency freeze"
 
 [dependencies]
 soroban-sdk = { workspace = true }
@@ -9,8 +10,3 @@ soroban-token-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-
-[[example]]
-name = "deploy"
-path = "examples/deploy.rs"
-crate-type = ["bin"]

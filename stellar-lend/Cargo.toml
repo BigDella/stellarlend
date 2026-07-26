@@ -17,6 +17,7 @@ members = [
   "contracts/lending-interest",
   "contracts/lending-risk",
   "contracts/safe-math",
+  "contracts/math",
   "contracts/stablecoin",
   "contracts/institutional-wallet",
   "contracts/migration-hub",
@@ -68,6 +69,7 @@ exclude = [
 [workspace.dependencies]
 soroban-sdk = "23.4.1"
 stellarlend-safe-math = { path = "contracts/safe-math" }
+stellarlend-math = { path = "contracts/math" }
 soroban-token-sdk = { version = "23.4.1" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -2,14 +2,10 @@
 name = "parameter-store"
 version = "0.1.0"
 edition = "2021"
+description = "Governance-managed on-chain parameter store for pool configuration with timelock, emergency overrides, and audit trail"
 
 [dependencies]
 soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-
-[[example]]
-name = "deploy"
-path = "examples/deploy.rs"
-crate-type = ["bin"]
