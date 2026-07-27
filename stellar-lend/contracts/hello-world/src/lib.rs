@@ -1417,6 +1417,18 @@ impl HelloContract {
         amm::get_accrued_lp_fees(&env, &asset)
     }
 
+    /// Auto-compound accrued LP fees back into the LP position (issue #666,
+    /// minimal auto-compounding slice — see amm::compound_lp_fees doc comment
+    /// for what's deliberately out of scope). Returns the amount compounded
+    /// (0 if there was nothing accrued).
+    pub fn amm_compound_lp_fees(
+        env: Env,
+        admin: Address,
+        asset: Address,
+    ) -> Result<i128, LendingError> {
+        amm::compound_lp_fees(&env, admin, asset).map_err(|_| LendingError::Unauthorized)
+    }
+
     /// Update impermanent loss tracking
     pub fn amm_update_il_tracking(env: Env, asset: Address, current_price: i128) -> Result<bool, LendingError> {
         amm::update_il_tracking(&env, &asset, current_price)
