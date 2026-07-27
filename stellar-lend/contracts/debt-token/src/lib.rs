@@ -567,7 +567,11 @@ impl StellarLendDebtToken {
             return Ok(config.interest_index);
         }
 
-        let new_index = config.interest_index;
+        let new_index = total_supply
+            .checked_mul(ONE)
+            .ok_or(DebtTokenError::Overflow)?
+            .checked_div(total_principal)
+            .ok_or(DebtTokenError::Overflow)?;
 
         let mut updated_config = config.clone();
         updated_config.interest_index = new_index;
