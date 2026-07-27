@@ -1584,6 +1584,43 @@ impl HelloContract {
         rate_limiter::get_global_status(&env, operation, pool)
     }
 
+    /// Admin-only: configure congestion-based adaptation of rate limits.
+    ///
+    /// Disabled by default; enabling it scales the configured limits down when the network
+    /// is congested and back up when it is quiet, within the configured bps band.
+    pub fn configure_rate_limit_congestion(
+        env: Env,
+        caller: Address,
+        cfg: rate_limiter::CongestionConfig,
+    ) -> Result<(), LendingError> {
+        rate_limiter::configure_congestion(&env, caller, cfg).map_err(|e| match e {
+            rate_limiter::RateLimitError::Unauthorized => LendingError::Unauthorized,
+            _ => LendingError::InvalidParameter,
+        })
+    }
+
+    /// Report the current network congestion index in bps (`10_000` == normal).
+    ///
+    /// Callable by the admin or holders of the `congestion_reporter` role. Intended for an
+    /// off-chain network monitor, since Soroban exposes no fee-market data to contracts.
+    /// Reports expire after the configured TTL, after which the contract falls back to its
+    /// own ledger-close-interval observation.
+    pub fn report_network_congestion(
+        env: Env,
+        caller: Address,
+        congestion_bps: i128,
+    ) -> Result<(), LendingError> {
+        rate_limiter::report_congestion(&env, caller, congestion_bps).map_err(|e| match e {
+            rate_limiter::RateLimitError::Unauthorized => LendingError::Unauthorized,
+            _ => LendingError::InvalidParameter,
+        })
+    }
+
+    /// Read-only: current congestion signal, derived scaling factor, and its source.
+    pub fn get_rate_limit_congestion_state(env: Env) -> rate_limiter::CongestionState {
+        rate_limiter::get_congestion_state(&env)
+    }
+
     // -------------------------------------------------------------------------
     // Interest Rate Views (Issue #180)
     // -------------------------------------------------------------------------
