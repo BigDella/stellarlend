@@ -1,3 +1,4 @@
+pub use shared_events::*;
 use soroban_sdk::{Address, Env, Symbol};
 
 pub const EVENT_VERSION: u32 = 1;

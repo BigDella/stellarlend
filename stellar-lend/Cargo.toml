@@ -49,6 +49,7 @@ members = [
   "contracts/vault-share",
   "contracts/auto-compound-vault",
   "contracts/pool-interfaces",
+  "contracts/yield-router", "contracts/shared-events",
   "contracts/yield-router",
   "contracts/dutch-auction",
   "contracts/debt-token",

@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
+shared-events = { path = "../shared-events" }
 soroban-sdk = { workspace = true }
 soroban-token-sdk = { workspace = true }
 stellarlend-common = { path = "../common" }

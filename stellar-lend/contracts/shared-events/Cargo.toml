@@ -1,8 +1,11 @@
 [package]
-name = "stellarlend-core"
+name = "shared-events"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [dependencies]
-shared-events = { path = "../shared-events" }
 soroban-sdk = { workspace = true }
+
+[lints]
+workspace = true
