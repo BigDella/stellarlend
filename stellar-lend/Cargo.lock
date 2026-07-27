@@ -1796,7 +1796,7 @@ dependencies = [
 name = "multi-user-simulation"
 version = "0.1.0"
 dependencies = [
- "rand 0.8.7",
+ "rand 0.10.2",
  "soroban-sdk",
  "statrs",
  "tokio",
@@ -3388,7 +3388,7 @@ name = "stellarlend-migration-tests"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "rand 0.8.7",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "soroban-sdk",
