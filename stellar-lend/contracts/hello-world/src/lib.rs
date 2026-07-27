@@ -651,6 +651,44 @@ impl HelloContract {
         debt_token::transfer_debt_token(&env, from, to, token_id).map_err(Into::into)
     }
 
+    /// List a debt token for sale at a fixed price (issue #664, minimal slice —
+    /// not the full Dutch-auction/order-book system described in that issue).
+    pub fn list_debt_token(
+        env: Env,
+        seller: Address,
+        token_id: u64,
+        price: i128,
+        payment_token: Address,
+    ) -> Result<(), LendingError> {
+        debt_token::list_debt_token(&env, seller, token_id, price, payment_token).map_err(Into::into)
+    }
+
+    /// Cancel an active fixed-price listing.
+    pub fn cancel_debt_token_listing(
+        env: Env,
+        seller: Address,
+        token_id: u64,
+    ) -> Result<(), LendingError> {
+        debt_token::cancel_listing(&env, seller, token_id).map_err(Into::into)
+    }
+
+    /// Buy a listed debt token at its asking price.
+    pub fn buy_listed_debt_token(
+        env: Env,
+        buyer: Address,
+        token_id: u64,
+    ) -> Result<(), LendingError> {
+        debt_token::buy_listed_debt_token(&env, buyer, token_id).map_err(Into::into)
+    }
+
+    /// Read-only: the active listing for a debt token, if any.
+    pub fn get_debt_token_listing(
+        env: Env,
+        token_id: u64,
+    ) -> Option<debt_token::DebtTokenListing> {
+        debt_token::get_listing(&env, token_id)
+    }
+
     /// Burn a debt token (debt repayment)
     pub fn burn_debt_token(
         env: Env,
