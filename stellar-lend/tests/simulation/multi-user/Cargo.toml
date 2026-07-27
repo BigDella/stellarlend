@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-soroban-sdk = { version = "21.5", features = ["contracttype", "testutils"] }
+soroban-sdk = { workspace = true, features = ["testutils"] }
 tokio = { version = "1", features = ["full"] }
 rand = "0.8"
 statrs = "0.16"

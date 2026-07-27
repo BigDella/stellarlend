@@ -1,6 +1,6 @@
-import { StressTestInput, StressTestResult, PositionSnapshot } from '../risk-engine/stress-tester/types';
-import { stressTester } from '../risk-engine/stress-tester/engine';
-import { scenarioRegistry } from '../risk-engine/stress-tester/scenario-registry';
+import { StressTestInput, StressTestResult, PositionSnapshot } from './types';
+import { stressTester } from './engine';
+import { scenarioRegistry } from './scenario-registry';
 
 class StressTestService {
   runStressTest(input: StressTestInput): StressTestResult {

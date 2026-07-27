@@ -57,6 +57,7 @@ import pnlRoutes from './routes/pnl.routes';
 import insuranceRoutes from './routes/insurance.routes';
 import plannerRoutes from './routes/planner.routes';
 import feeTierRoutes from './routes/fee-tiers.routes';
+import reinvestmentRoutes from './routes/reinvestment.routes';
 
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
@@ -255,6 +256,7 @@ app.use('/api/pnl', pnlRoutes);
 app.use('/api/insurance', insuranceRoutes);
 app.use('/api/planner', plannerRoutes);
 app.use('/api/fee-tiers', feeTierRoutes);
+app.use('/api/reinvestment', reinvestmentRoutes);
 
 app.use(errorHandler);
 

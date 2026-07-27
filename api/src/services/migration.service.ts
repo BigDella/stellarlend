@@ -1,8 +1,7 @@
 import { StellarService } from './stellar.service';
 import { redisCacheService } from './redisCache.service';
-import { Logger } from '../utils/logger';
+import logger from '../utils/logger';
 
-const logger = new Logger('MigrationService');
 const MIGRATION_CACHE_TTL_S = 60;
 
 export interface MigrationPreview {
