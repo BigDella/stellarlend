@@ -51,6 +51,7 @@ pub mod cross_asset_tests;
 pub mod debt_token_tests;
 pub mod rebalancing_tests;
 pub mod test_utils;
+pub mod amm_compound_test;
 
 // Property-based tests (proptest)
 pub mod prop_arithmetic_test;
