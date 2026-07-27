@@ -65,6 +65,12 @@ impl GasMetrics {
     }
 }
 
+impl Default for GasMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn benchmark_operation<F>(env: &Env, operation: &str, f: F) -> GasReport
 where
     F: FnOnce(&Env) -> u64,

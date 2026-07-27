@@ -88,6 +88,15 @@ impl RunConfig {
         m.insert("lending::repay".into(), 1_000_000);
         m.insert("lending::withdraw".into(), 1_000_000);
         m.insert("lending::liquidate".into(), 1_500_000);
+        m.insert("lending::liquidate_plan_optimized".into(), 250_000);
+        m.insert(
+            "lending::liquidate_plan_optimized_scale_100".into(),
+            900_000,
+        );
+        m.insert("lending::liquidate_flash_loan_plan".into(), 350_000);
+        m.insert("lending::interest_full_recompute".into(), 600_000);
+        m.insert("lending::interest_incremental_update".into(), 220_000);
+        m.insert("lending::interest_same_block_cached".into(), 80_000);
         m.insert("lending::flash_loan".into(), 1_800_000);
         m.insert("lending::get_health_factor".into(), 400_000);
         m.insert("lending::get_user_position".into(), 400_000);

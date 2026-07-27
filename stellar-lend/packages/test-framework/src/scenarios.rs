@@ -24,10 +24,15 @@ impl ScenarioRunner {
     }
 
     pub fn run_scenario(&self, _env: &Env, scenario: &Scenario) -> ScenarioResult {
+        let failed_step = scenario
+            .steps
+            .iter()
+            .position(|step| step.expected_result.trim().is_empty());
+
         ScenarioResult {
             scenario_id: scenario.id.clone(),
-            passed: true,
-            failed_step: None,
+            passed: failed_step.is_none(),
+            failed_step,
             total_steps: scenario.steps.len(),
         }
     }

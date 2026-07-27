@@ -1,0 +1,64 @@
+name: Contract Integration Tests
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'stellar-lend/contracts/**'
+      - 'stellar-lend/packages/test-framework/**'
+      - 'stellar-lend/benchmarks/**'
+      - '.github/workflows/contract-integration-tests.yml'
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  integration:
+    name: Integration, Fuzz Smoke, Gas Diff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            stellar-lend/target
+          key: ${{ runner.os }}-contracts-integration-${{ hashFiles('stellar-lend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-contracts-integration-
+
+      - name: Check formatting
+        working-directory: stellar-lend
+        run: cargo fmt --all -- --check
+
+      - name: Run integration framework tests
+        working-directory: stellar-lend
+        run: cargo test --package test-framework --verbose
+
+      - name: Run lending tests
+        working-directory: stellar-lend
+        run: cargo test --package stellarlend-lending --verbose
+
+      - name: Run flash-loan liquidation integration tests
+        working-directory: stellar-lend
+        run: cargo test --package flash-loan-liquidation-tests --verbose
+
+      - name: Run gas benchmarks with regression detection
+        working-directory: stellar-lend
+        run: cargo run --release --bin run_benchmarks -- --compare benchmarks/baseline.json --output benchmark-results.json
+
+      - name: Upload gas diff report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-gas-diff
+          path: |
+            stellar-lend/benchmark-results.json
+            stellar-lend/benchmark-results.md

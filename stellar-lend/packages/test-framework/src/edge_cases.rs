@@ -16,9 +16,7 @@ pub struct EdgeCaseCatalog {
 
 impl EdgeCaseCatalog {
     pub fn new() -> Self {
-        EdgeCaseCatalog {
-            cases: Vec::new(),
-        }
+        EdgeCaseCatalog { cases: Vec::new() }
     }
 
     pub fn add_case(&mut self, case: EdgeCase) {
@@ -82,7 +80,71 @@ pub fn liquidation_edge_cases() -> Vec<EdgeCase> {
             input: "gas cost > liquidation bonus".to_string(),
             expected_behavior: "Should revert with Unprofitable".to_string(),
         },
+        EdgeCase {
+            id: "liquidate_004".to_string(),
+            function: "liquidate".to_string(),
+            description: "Scale liquidation queue".to_string(),
+            input: "100+ simultaneous liquidatable accounts".to_string(),
+            expected_behavior: "Should process in bounded batches without exceeding gas budget"
+                .to_string(),
+        },
+        EdgeCase {
+            id: "liquidate_005".to_string(),
+            function: "liquidate".to_string(),
+            description: "Partial liquidation close factor".to_string(),
+            input: "requested repay amount above close factor".to_string(),
+            expected_behavior: "Should clamp repay amount before storage writes".to_string(),
+        },
     ]
+}
+
+pub fn interest_edge_cases() -> Vec<EdgeCase> {
+    vec![
+        EdgeCase {
+            id: "interest_001".to_string(),
+            function: "accrue_interest".to_string(),
+            description: "No-op update in the same block".to_string(),
+            input: "lastUpdateBlock equals current ledger sequence".to_string(),
+            expected_behavior: "Should return cached index without storage write".to_string(),
+        },
+        EdgeCase {
+            id: "interest_002".to_string(),
+            function: "accrue_interest".to_string(),
+            description: "Cache invalidation on rate model update".to_string(),
+            input: "borrow rate changes after previous accrual".to_string(),
+            expected_behavior: "Should close old segment and persist lastCachedRate".to_string(),
+        },
+        EdgeCase {
+            id: "interest_003".to_string(),
+            function: "current_index".to_string(),
+            description: "View call uses cached rate".to_string(),
+            input: "read-only cumulative index request".to_string(),
+            expected_behavior: "Should compute projected index without persistent storage write"
+                .to_string(),
+        },
+        EdgeCase {
+            id: "interest_004".to_string(),
+            function: "accrue_interest".to_string(),
+            description: "Ledger timestamp moves backwards during reorg".to_string(),
+            input: "current timestamp below lastUpdateTime".to_string(),
+            expected_behavior: "Should keep cumulativeInterestIndex monotonic".to_string(),
+        },
+    ]
+}
+
+impl Default for EdgeCaseCatalog {
+    fn default() -> Self {
+        let mut catalog = Self::new();
+        for case in deposit_edge_cases()
+            .into_iter()
+            .chain(liquidation_edge_cases())
+            .chain(interest_edge_cases())
+            .chain(oracle_edge_cases())
+        {
+            catalog.add_case(case);
+        }
+        catalog
+    }
 }
 
 pub fn oracle_edge_cases() -> Vec<EdgeCase> {

@@ -1,10 +1,10 @@
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Address, Env, Vec as SorobanVec};
 
 pub struct ContractFixture {
     pub env: Env,
     pub admin: Address,
     pub governance: Address,
-    pub oracle_addresses: Vec<Address>,
+    pub oracle_addresses: SorobanVec<Address>,
 }
 
 impl ContractFixture {
@@ -13,7 +13,7 @@ impl ContractFixture {
             env,
             admin: Address::generate(&env),
             governance: Address::generate(&env),
-            oracle_addresses: Vec::new(&env),
+            oracle_addresses: SorobanVec::new(&env),
         }
     }
 
