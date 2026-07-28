@@ -58,6 +58,9 @@ import insuranceRoutes from './routes/insurance.routes';
 import plannerRoutes from './routes/planner.routes';
 import feeTierRoutes from './routes/fee-tiers.routes';
 import reinvestmentRoutes from './routes/reinvestment.routes';
+import dutchAuctionRoutes from './routes/dutchAuction.routes';
+import autoCompoundVaultRoutes from './routes/autoCompoundVault.routes';
+import riskScoringRoutes from './routes/riskScoring.routes';
 
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
@@ -257,6 +260,9 @@ app.use('/api/insurance', insuranceRoutes);
 app.use('/api/planner', plannerRoutes);
 app.use('/api/fee-tiers', feeTierRoutes);
 app.use('/api/reinvestment', reinvestmentRoutes);
+app.use('/api/auctions', dutchAuctionRoutes);
+app.use('/api/vault', autoCompoundVaultRoutes);
+app.use('/api/risk-scoring', riskScoringRoutes);
 
 app.use(errorHandler);
 

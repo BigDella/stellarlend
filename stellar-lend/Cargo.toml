@@ -48,6 +48,7 @@ members = [
   "contracts/yield-splitter",
   "contracts/vault-share",
   "contracts/auto-compound-vault",
+  "contracts/risk-scoring",
   "contracts/pool-interfaces",
   "contracts/yield-router", "contracts/shared-events",
   "contracts/yield-router",
