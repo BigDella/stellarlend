@@ -1,7 +1,7 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(deprecated)]
 
-use soroban_sdk::{contract, contractimpl, Address, Env, IntoVal, String, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Env, IntoVal, String, Symbol, Vec};
 
 pub mod admin;
 pub mod amm;
@@ -628,6 +628,26 @@ impl HelloContract {
         paused: bool,
     ) -> Result<(), LendingError> {
         rebalancing::set_rebalancing_pause(&env, admin, paused).map_err(Into::into)
+    }
+
+    /// #673 — bounded rebalancing history for a user (performance impact review).
+    pub fn get_rebalancing_history(
+        env: Env,
+        user: Address,
+    ) -> Vec<rebalancing::RebalancingHistoryEntry> {
+        rebalancing::get_rebalancing_history(&env, &user)
+    }
+
+    /// #673 — gas-optimized batch rebalancing across multiple opted-in users
+    /// in a single call. Returns one bool per input user (true = rebalanced).
+    /// See `rebalancing::execute_batch_rebalancing`'s doc comment for why
+    /// only `caller` needs to authorize, not each individual user.
+    pub fn execute_batch_rebalancing(
+        env: Env,
+        caller: Address,
+        users: Vec<Address>,
+    ) -> Vec<bool> {
+        rebalancing::execute_batch_rebalancing(&env, caller, users)
     }
 
     /// Mint a new debt token for a position
@@ -1514,6 +1534,44 @@ impl HelloContract {
         analytics::generate_protocol_report(&env).map_err(Into::into)
     }
 
+    /// #672 — take and store a new historical metrics snapshot (TVL,
+    /// utilization, avg rate). Also checks configured alert thresholds.
+    pub fn record_metrics_snapshot(env: Env) -> Result<analytics::MetricsSnapshot, LendingError> {
+        analytics::record_metrics_snapshot(&env).map_err(Into::into)
+    }
+
+    /// #672 — read-only bounded history of metrics snapshots, oldest-first.
+    pub fn get_metrics_history(env: Env) -> Vec<analytics::MetricsSnapshot> {
+        analytics::get_metrics_history(&env)
+    }
+
+    /// #672 — linear-trend forecast of TVL, `periods_ahead` snapshot-intervals out.
+    pub fn forecast_tvl(env: Env, periods_ahead: u32) -> Result<i128, LendingError> {
+        analytics::forecast_tvl(&env, periods_ahead).map_err(Into::into)
+    }
+
+    /// #672 — configure (admin-only) an alert threshold for a named metric
+    /// ("tvl", "utilization", or "avg_rate").
+    pub fn set_metric_alert_threshold(
+        env: Env,
+        admin: Address,
+        metric: Symbol,
+        threshold: i128,
+    ) -> Result<(), LendingError> {
+        analytics::set_metric_alert_threshold(&env, admin, metric, threshold).map_err(Into::into)
+    }
+
+    /// #672 — check current metrics against configured thresholds; returns
+    /// the metric names whose threshold is currently crossed.
+    pub fn check_metric_alerts(env: Env) -> Result<Vec<Symbol>, LendingError> {
+        analytics::check_metric_alerts(&env).map_err(Into::into)
+    }
+
+    /// #672 — bounded audit log of previously triggered alerts.
+    pub fn get_triggered_alerts(env: Env) -> Vec<analytics::TriggeredAlert> {
+        analytics::get_triggered_alerts(&env)
+    }
+
     /// Read-only user position query.
     pub fn get_user_position(env: Env, user: Address) -> Result<Position, LendingError> {
         analytics::get_user_position_summary(&env, &user).map_err(Into::into)
@@ -2053,6 +2111,49 @@ mod treasury_test;
     ) -> Result<(), LendingError> {
         timelock::cancel_timelock_operation(&env, caller, operation_id)
             .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// #674 — configure (admin-only) a timelock delay override for a specific
+    /// action type. `action_type_id` values: 0=MinCollateralRatio,
+    /// 1=RiskParams, 2=PauseSwitch, 3=EmergencyPause, 4=GenericAction,
+    /// 5=InterestRateConfig.
+    pub fn set_action_type_delay(
+        env: Env,
+        admin: Address,
+        action_type_id: u32,
+        delay: u64,
+    ) -> Result<(), LendingError> {
+        timelock::set_action_type_delay(&env, admin, action_type_id, delay)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// #674 — a guardian approves an emergency override to bypass a queued
+    /// operation's remaining timelock delay. Requires the same guardian set
+    /// used by social recovery.
+    pub fn guardian_approve_emergency_execution(
+        env: Env,
+        guardian: Address,
+        operation_id: u64,
+    ) -> Result<(), LendingError> {
+        timelock::guardian_approve_emergency_execution(&env, guardian, operation_id)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// #674 — execute a queued operation immediately once enough guardians
+    /// have approved the emergency override, bypassing the remaining delay.
+    pub fn guardian_emergency_execute(
+        env: Env,
+        executor: Address,
+        operation_id: u64,
+    ) -> Result<(), LendingError> {
+        timelock::guardian_emergency_execute(&env, executor, operation_id)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// #675 — cancel a pending social-recovery request during its delay
+    /// window. Callable by the protected account or any guardian.
+    pub fn cancel_recovery(env: Env, caller: Address) -> Result<(), LendingError> {
+        recovery::cancel_recovery(&env, caller).map_err(|_| LendingError::Unauthorized)
     }
 
     /// Get timelock operation

@@ -97,7 +97,11 @@ pub fn queue_timelock_operation(
     proposer.require_auth();
 
     let config = get_timelock_config(env);
-    let delay = custom_delay.unwrap_or(config.default_delay);
+    // #674 — resolve delay in priority order: an explicit per-call override,
+    // then a configured per-action-type default, then the global default.
+    let delay = custom_delay
+        .or_else(|| get_action_type_delay(env, action_type_id(&proposal_type)))
+        .unwrap_or(config.default_delay);
 
     if delay < config.min_delay || delay > config.max_delay {
         return Err(GovernanceError::InvalidTimelockDelay);
@@ -539,6 +543,174 @@ fn execute_proposal_type(env: &Env, proposal_type: &ProposalType) -> Result<(), 
             return Err(GovernanceError::InvalidProposalType);
         }
     }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// #674 — configurable per-action-type delay, and guardian emergency override.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Stable numeric identifier for each `ProposalType` variant, used as the key
+/// for per-action-type delay configuration. Independent of the enum's actual
+/// discriminant/memory representation so it's safe to store long-term.
+fn action_type_id(proposal_type: &ProposalType) -> u32 {
+    match proposal_type {
+        ProposalType::MinCollateralRatio(_) => 0,
+        ProposalType::RiskParams(_, _, _, _) => 1,
+        ProposalType::PauseSwitch(_, _) => 2,
+        ProposalType::EmergencyPause(_) => 3,
+        ProposalType::GenericAction(_) => 4,
+        ProposalType::InterestRateConfig(_) => 5,
+    }
+}
+
+/// Configure a timelock delay override for a specific action type. Admin-only.
+/// Takes effect for operations queued after this call; does not retroactively
+/// change already-queued operations.
+pub fn set_action_type_delay(
+    env: &Env,
+    admin: Address,
+    action_type_id: u32,
+    delay: u64,
+) -> Result<(), GovernanceError> {
+    admin.require_auth();
+    let configured_admin = crate::governance::get_admin(env).ok_or(GovernanceError::NotInitialized)?;
+    if admin != configured_admin {
+        return Err(GovernanceError::Unauthorized);
+    }
+
+    let config = get_timelock_config(env);
+    if delay < config.min_delay || delay > config.max_delay {
+        return Err(GovernanceError::InvalidActionTypeDelay);
+    }
+
+    env.storage()
+        .instance()
+        .set(&storage::GovernanceDataKey::ActionTypeDelay(action_type_id), &delay);
+    Ok(())
+}
+
+/// Get the configured delay override for an action type, if any.
+pub fn get_action_type_delay(env: &Env, action_type_id: u32) -> Option<u64> {
+    env.storage()
+        .instance()
+        .get(&storage::GovernanceDataKey::ActionTypeDelay(action_type_id))
+}
+
+/// #674 — guardian emergency override: lets the SAME guardian set used by
+/// social recovery (`GovernanceDataKey::Guardians` / `GuardianThreshold`,
+/// see recovery.rs) collectively bypass a queued operation's remaining
+/// timelock delay in a genuine emergency, without waiting for `ready_at`.
+/// Requires the same M-of-N guardian threshold as recovery — a single
+/// guardian cannot unilaterally bypass the timelock, preserving the
+/// timelock's core guarantee against any one compromised/malicious party.
+///
+/// Two-step flow mirrors recovery.rs's approve/execute pattern:
+/// 1. Each guardian calls `guardian_approve_emergency_execution`.
+/// 2. Once threshold is met, anyone calls `guardian_emergency_execute`.
+pub fn guardian_approve_emergency_execution(
+    env: &Env,
+    guardian: Address,
+    operation_id: u64,
+) -> Result<(), GovernanceError> {
+    guardian.require_auth();
+
+    let guardians: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&storage::GovernanceDataKey::Guardians)
+        .ok_or(GovernanceError::GuardianNotFound)?;
+    if !guardians.contains(guardian.clone()) {
+        return Err(GovernanceError::Unauthorized);
+    }
+
+    let operation_key = storage::GovernanceDataKey::TimelockOperation(operation_id);
+    let operation: TimelockOperation = env
+        .storage()
+        .persistent()
+        .get(&operation_key)
+        .ok_or(GovernanceError::TimelockNotFound)?;
+    if operation.status != TimelockStatus::Pending && operation.status != TimelockStatus::Ready {
+        return Err(GovernanceError::InvalidTimelockStatus);
+    }
+
+    let approvals_key = storage::GovernanceDataKey::TimelockEmergencyApprovals(operation_id);
+    let mut approvals: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&approvals_key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    if approvals.contains(guardian.clone()) {
+        return Err(GovernanceError::EmergencyOverrideAlreadyApproved);
+    }
+    approvals.push_back(guardian);
+    env.storage().persistent().set(&approvals_key, &approvals);
+    Ok(())
+}
+
+/// Execute a queued operation immediately, bypassing its remaining delay,
+/// once enough guardians have approved via `guardian_approve_emergency_execution`.
+/// `executor` need not itself be a guardian — anyone may submit once threshold
+/// approvals exist, matching `execute_timelock_operation`'s own open-executor
+/// convention.
+pub fn guardian_emergency_execute(
+    env: &Env,
+    executor: Address,
+    operation_id: u64,
+) -> Result<(), GovernanceError> {
+    let threshold: u32 = env
+        .storage()
+        .persistent()
+        .get(&storage::GovernanceDataKey::GuardianThreshold)
+        .unwrap_or(1u32);
+
+    let approvals_key = storage::GovernanceDataKey::TimelockEmergencyApprovals(operation_id);
+    let approvals: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&approvals_key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    if approvals.len() < threshold {
+        return Err(GovernanceError::InsufficientEmergencyApprovals);
+    }
+
+    let operation_key = storage::GovernanceDataKey::TimelockOperation(operation_id);
+    let mut operation: TimelockOperation = env
+        .storage()
+        .persistent()
+        .get(&operation_key)
+        .ok_or(GovernanceError::TimelockNotFound)?;
+
+    if operation.status != TimelockStatus::Pending && operation.status != TimelockStatus::Ready {
+        return Err(GovernanceError::InvalidTimelockStatus);
+    }
+
+    // Note: deliberately does NOT check `now < operation.ready_at` — bypassing
+    // that check is the entire point of an emergency override. Expiry is
+    // still respected: an operation that has already expired must be
+    // re-queued rather than force-executed.
+    let now = env.ledger().timestamp();
+    if is_expired(env, operation.expires_at) {
+        operation.status = TimelockStatus::Expired;
+        env.storage().persistent().set(&operation_key, &operation);
+        return Err(GovernanceError::TimelockExpired);
+    }
+
+    execute_proposal_type(env, &operation.proposal_type)?;
+
+    operation.status = TimelockStatus::Executed;
+    env.storage().persistent().set(&operation_key, &operation);
+    env.storage().persistent().remove(&approvals_key);
+
+    crate::events::TimelockExecutedEvent {
+        operation_id,
+        executor,
+        timestamp: now,
+    }
+    .publish(env);
+
     Ok(())
 }
 

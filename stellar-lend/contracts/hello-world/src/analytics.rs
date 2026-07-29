@@ -42,6 +42,8 @@ pub enum AnalyticsError {
     Overflow = 3,
     /// Requested data (user position, activity, etc.) was not found
     DataNotFound = 4,
+    /// #672 — caller is not authorized to configure analytics (e.g. alert thresholds)
+    Unauthorized = 5,
 }
 
 /// Storage keys for analytics data.
@@ -63,6 +65,12 @@ pub enum AnalyticsDataKey {
     /// Cumulative count of all protocol transactions
     /// Value type: u64
     TotalTransactions,
+    /// #672 — bounded history of periodic protocol metric snapshots: Vec<MetricsSnapshot>
+    MetricsHistory,
+    /// #672 — configured alert thresholds: Vec<MetricAlertThreshold>
+    AlertThresholds,
+    /// #672 — bounded log of triggered alerts (for audit/dedup): Vec<TriggeredAlert>
+    TriggeredAlerts,
 }
 
 /// Snapshot of protocol-wide metrics.
@@ -678,4 +686,284 @@ pub fn generate_user_report(env: &Env, user: &Address) -> Result<UserReport, Ana
     };
 
     Ok(report)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// #672 — Historical snapshots, growth forecasting, and threshold alerting.
+//
+// Real-time metrics (TVL, utilization, avg rate) were already computed by
+// the functions above; this section adds the parts #672 actually asked for
+// that were missing: a bounded history of periodic snapshots to visualize
+// trends over time, a simple linear-trend forecast derived from that
+// history, and configurable metric-threshold alerts. Dashboard widgets,
+// CSV/PDF export, and the query API are frontend/API-layer concerns and are
+// out of scope here — see the PR description.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Maximum historical snapshots retained (oldest pruned first).
+const MAX_METRICS_HISTORY: u32 = 90;
+
+/// A single point-in-time snapshot of protocol-wide metrics, for historical
+/// visualization and forecasting.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MetricsSnapshot {
+    pub timestamp: u64,
+    pub total_value_locked: i128,
+    pub utilization_rate: i128,
+    pub average_borrow_rate: i128,
+}
+
+/// A configured alert threshold for a named metric.
+///
+/// `metric` is one of: "tvl", "utilization", "avg_rate" (matching the fields
+/// captured in `MetricsSnapshot`).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MetricAlertThreshold {
+    pub metric: Symbol,
+    /// Alert fires when the metric's current value is >= this threshold.
+    pub threshold: i128,
+}
+
+/// A record of a triggered alert, for audit trail purposes.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TriggeredAlert {
+    pub metric: Symbol,
+    pub value: i128,
+    pub threshold: i128,
+    pub timestamp: u64,
+}
+
+/// Take and store a new historical metrics snapshot from the current
+/// real-time protocol metrics. Intended to be called periodically (e.g. by
+/// an off-chain keeper, or opportunistically alongside other state-mutating
+/// calls) — the contract itself has no notion of a background scheduler.
+pub fn record_metrics_snapshot(env: &Env) -> Result<MetricsSnapshot, AnalyticsError> {
+    let tvl = get_total_value_locked(env)?;
+    let utilization = get_protocol_utilization(env)?;
+    let avg_rate = calculate_weighted_avg_interest_rate(env)?;
+
+    let snapshot = MetricsSnapshot {
+        timestamp: env.ledger().timestamp(),
+        total_value_locked: tvl,
+        utilization_rate: utilization,
+        average_borrow_rate: avg_rate,
+    };
+
+    let key = AnalyticsDataKey::MetricsHistory;
+    let mut history: Vec<MetricsSnapshot> =
+        env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
+    history.push_back(snapshot.clone());
+    while history.len() > MAX_METRICS_HISTORY {
+        history.remove(0);
+    }
+    env.storage().persistent().set(&key, &history);
+
+    check_metric_alerts_internal(env, &snapshot);
+
+    Ok(snapshot)
+}
+
+/// Get the full bounded snapshot history, oldest-first.
+pub fn get_metrics_history(env: &Env) -> Vec<MetricsSnapshot> {
+    env.storage()
+        .persistent()
+        .get(&AnalyticsDataKey::MetricsHistory)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Forecast a future value of `total_value_locked` using simple linear
+/// least-squares regression over the recorded history, projected
+/// `periods_ahead` snapshot-intervals into the future.
+///
+/// This is deliberately a plain linear trend, not a real forecasting model —
+/// #672 asked for "linear, exponential" forecasting; linear is implemented
+/// honestly here, and an exponential model is deferred (see PR description)
+/// since it requires choosing a decay/growth basis that would otherwise be
+/// guessed rather than derived from real usage data.
+///
+/// Requires at least 2 snapshots. Returns `AnalyticsError::DataNotFound` if
+/// there isn't enough history yet.
+pub fn forecast_tvl(env: &Env, periods_ahead: u32) -> Result<i128, AnalyticsError> {
+    let history = get_metrics_history(env);
+    if history.len() < 2 {
+        return Err(AnalyticsError::DataNotFound);
+    }
+
+    let n = history.len() as i128;
+    let mut sum_x: i128 = 0;
+    let mut sum_y: i128 = 0;
+    let mut sum_xy: i128 = 0;
+    let mut sum_xx: i128 = 0;
+
+    for i in 0..history.len() {
+        let x = i as i128;
+        let y = history.get(i).unwrap().total_value_locked;
+        sum_x = sum_x.checked_add(x).ok_or(AnalyticsError::Overflow)?;
+        sum_y = sum_y.checked_add(y).ok_or(AnalyticsError::Overflow)?;
+        sum_xy = sum_xy
+            .checked_add(x.checked_mul(y).ok_or(AnalyticsError::Overflow)?)
+            .ok_or(AnalyticsError::Overflow)?;
+        sum_xx = sum_xx
+            .checked_add(x.checked_mul(x).ok_or(AnalyticsError::Overflow)?)
+            .ok_or(AnalyticsError::Overflow)?;
+    }
+
+    // Least-squares slope: slope = (n*Sigma_xy - Sigma_x*Sigma_y) / (n*Sigma_xx - (Sigma_x)^2)
+    let n_sum_xx = n.checked_mul(sum_xx).ok_or(AnalyticsError::Overflow)?;
+    let sum_x_sq = sum_x.checked_mul(sum_x).ok_or(AnalyticsError::Overflow)?;
+    let denom = n_sum_xx.checked_sub(sum_x_sq).ok_or(AnalyticsError::Overflow)?;
+
+    if denom == 0 {
+        // All snapshots at the same x (shouldn't happen with real timestamps,
+        // but guards div-by-zero) — flat forecast at the last known value.
+        return Ok(history.get(history.len() - 1).unwrap().total_value_locked);
+    }
+
+    let n_sum_xy = n.checked_mul(sum_xy).ok_or(AnalyticsError::Overflow)?;
+    let sum_x_sum_y = sum_x.checked_mul(sum_y).ok_or(AnalyticsError::Overflow)?;
+    let slope_num = n_sum_xy.checked_sub(sum_x_sum_y).ok_or(AnalyticsError::Overflow)?;
+
+    let last_x = (history.len() - 1) as i128;
+    let target_x = last_x
+        .checked_add(periods_ahead as i128)
+        .ok_or(AnalyticsError::Overflow)?;
+
+    // intercept = (Sigma_y - slope*Sigma_x) / n, forecast = slope*target_x + intercept
+    // Rearranged over a common denominator to avoid intermediate precision loss:
+    // forecast = (slope_num * target_x + (sum_y * denom - slope_num * sum_x)) / (denom * n)
+    let slope_times_target = slope_num.checked_mul(target_x).ok_or(AnalyticsError::Overflow)?;
+    let sum_y_times_denom = sum_y.checked_mul(denom).ok_or(AnalyticsError::Overflow)?;
+    let slope_num_times_sum_x = slope_num.checked_mul(sum_x).ok_or(AnalyticsError::Overflow)?;
+    let intercept_num = sum_y_times_denom
+        .checked_sub(slope_num_times_sum_x)
+        .ok_or(AnalyticsError::Overflow)?;
+    let forecast_num = slope_times_target
+        .checked_add(intercept_num)
+        .ok_or(AnalyticsError::Overflow)?;
+    let forecast_denom = denom.checked_mul(n).ok_or(AnalyticsError::Overflow)?;
+
+    forecast_num
+        .checked_div(forecast_denom)
+        .ok_or(AnalyticsError::Overflow)
+}
+
+/// Configure (or update) an alert threshold for a metric. Admin-only.
+pub fn set_metric_alert_threshold(
+    env: &Env,
+    admin: Address,
+    metric: Symbol,
+    threshold: i128,
+) -> Result<(), AnalyticsError> {
+    admin.require_auth();
+    let configured_admin = crate::governance::get_admin(env).ok_or(AnalyticsError::NotInitialized)?;
+    if admin != configured_admin {
+        return Err(AnalyticsError::Unauthorized);
+    }
+
+    let key = AnalyticsDataKey::AlertThresholds;
+    let mut thresholds: Vec<MetricAlertThreshold> =
+        env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
+
+    let mut updated = false;
+    for i in 0..thresholds.len() {
+        if thresholds.get(i).unwrap().metric == metric {
+            thresholds.set(i, MetricAlertThreshold { metric: metric.clone(), threshold });
+            updated = true;
+            break;
+        }
+    }
+    if !updated {
+        thresholds.push_back(MetricAlertThreshold { metric, threshold });
+    }
+
+    env.storage().persistent().set(&key, &thresholds);
+    Ok(())
+}
+
+/// Get all configured alert thresholds.
+pub fn get_metric_alert_thresholds(env: &Env) -> Vec<MetricAlertThreshold> {
+    env.storage()
+        .persistent()
+        .get(&AnalyticsDataKey::AlertThresholds)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Get the bounded log of previously triggered alerts (audit trail).
+pub fn get_triggered_alerts(env: &Env) -> Vec<TriggeredAlert> {
+    env.storage()
+        .persistent()
+        .get(&AnalyticsDataKey::TriggeredAlerts)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Check current real-time metrics against configured thresholds and
+/// return the list of metric names whose threshold is currently crossed.
+/// Also records any newly-crossed threshold into the triggered-alerts log.
+pub fn check_metric_alerts(env: &Env) -> Result<Vec<Symbol>, AnalyticsError> {
+    let tvl = get_total_value_locked(env)?;
+    let utilization = get_protocol_utilization(env)?;
+    let avg_rate = calculate_weighted_avg_interest_rate(env)?;
+
+    let snapshot = MetricsSnapshot {
+        timestamp: env.ledger().timestamp(),
+        total_value_locked: tvl,
+        utilization_rate: utilization,
+        average_borrow_rate: avg_rate,
+    };
+
+    Ok(check_metric_alerts_internal(env, &snapshot))
+}
+
+const MAX_TRIGGERED_ALERTS: u32 = 200;
+
+fn check_metric_alerts_internal(env: &Env, snapshot: &MetricsSnapshot) -> Vec<Symbol> {
+    let thresholds = get_metric_alert_thresholds(env);
+    let mut fired = Vec::new(env);
+
+    if thresholds.is_empty() {
+        return fired;
+    }
+
+    let mut triggered_log = get_triggered_alerts(env);
+    let mut log_changed = false;
+
+    for i in 0..thresholds.len() {
+        let t = thresholds.get(i).unwrap();
+        let current_value = if t.metric == Symbol::new(env, "tvl") {
+            Some(snapshot.total_value_locked)
+        } else if t.metric == Symbol::new(env, "utilization") {
+            Some(snapshot.utilization_rate)
+        } else if t.metric == Symbol::new(env, "avg_rate") {
+            Some(snapshot.average_borrow_rate)
+        } else {
+            None
+        };
+
+        if let Some(value) = current_value {
+            if value >= t.threshold {
+                fired.push_back(t.metric.clone());
+                triggered_log.push_back(TriggeredAlert {
+                    metric: t.metric.clone(),
+                    value,
+                    threshold: t.threshold,
+                    timestamp: snapshot.timestamp,
+                });
+                log_changed = true;
+            }
+        }
+    }
+
+    if log_changed {
+        while triggered_log.len() > MAX_TRIGGERED_ALERTS {
+            triggered_log.remove(0);
+        }
+        env.storage()
+            .persistent()
+            .set(&AnalyticsDataKey::TriggeredAlerts, &triggered_log);
+    }
+
+    fired
 }

@@ -424,3 +424,156 @@ pub fn get_il_snapshot(env: &Env, asset: &Address) -> Option<IlSnapshot> {
         .persistent()
         .get(&AmmLendingKey::IlTracking(asset.clone()))
 }
+
+// ─── Pool Allocation Optimizer (#682) ─────────────────────────────────────────
+
+/// Target utilization for optimal capital efficiency (80%)
+const OPTIMAL_UTILIZATION_BPS: i128 = 8000;
+
+/// Minimum rebalance threshold (5% difference to trigger rebalance)
+const REBALANCE_THRESHOLD_BPS: i128 = 500;
+
+/// Pool allocation recommendation
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AllocationRecommendation {
+    pub asset: Address,
+    pub current_utilization_bps: i128,
+    pub recommended_allocation_bps: i128,
+    pub action: AllocationAction,
+    pub amount: i128,
+}
+
+/// Action to take for allocation optimization
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum AllocationAction {
+    /// Move funds into this pool (under-utilized)
+    Increase,
+    /// Move funds out of this pool (over-utilized)
+    Decrease,
+    /// No change needed
+    NoChange,
+}
+
+/// Result of an optimization pass
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OptimizationResult {
+    pub recommendations: Vec<AllocationRecommendation>,
+    pub total_capital_efficiency_bps: i128,
+    pub estimated_yield_improvement_bps: i128,
+}
+
+/// Analyze pool utilization and recommend allocation changes.
+///
+/// Examines all tracked pools and recommends rebalancing actions to
+/// maximize capital efficiency while maintaining safety buffers.
+pub fn optimize_allocation(
+    env: &Env,
+    pools: &Vec<Address>,
+) -> Result<OptimizationResult, AmmError> {
+    let mut recommendations: Vec<AllocationRecommendation> = Vec::new(env);
+    let mut total_utilization: i128 = 0;
+    let mut pool_count: i128 = 0;
+
+    for pool in pools.iter() {
+        let utilization_key = AmmLendingKey::PoolUtilization(pool.clone());
+        let current_utilization: i128 = env
+            .storage()
+            .persistent()
+            .get::<AmmLendingKey, i128>(&utilization_key)
+            .unwrap_or(0);
+
+        total_utilization = total_utilization.saturating_add(current_utilization);
+        pool_count = pool_count.saturating_add(1);
+
+        let deviation = if current_utilization > OPTIMAL_UTILIZATION_BPS {
+            current_utilization - OPTIMAL_UTILIZATION_BPS
+        } else {
+            OPTIMAL_UTILIZATION_BPS - current_utilization
+        };
+
+        let (action, amount) = if deviation < REBALANCE_THRESHOLD_BPS {
+            (AllocationAction::NoChange, 0)
+        } else if current_utilization < OPTIMAL_UTILIZATION_BPS {
+            // Under-utilized — increase allocation
+            let buffer_key = AmmLendingKey::WithdrawalBufferBps(pool.clone());
+            let buffer_bps: i128 = env
+                .storage()
+                .persistent()
+                .get::<AmmLendingKey, i128>(&buffer_key)
+                .unwrap_or(DEFAULT_WITHDRAWAL_BUFFER_BPS);
+            let available = BPS_SCALE.saturating_sub(buffer_bps);
+            let increase_amount = available
+                .saturating_mul(OPTIMAL_UTILIZATION_BPS - current_utilization)
+                .checked_div(BPS_SCALE)
+                .unwrap_or(0);
+            (AllocationAction::Increase, increase_amount)
+        } else {
+            // Over-utilized — decrease allocation
+            let excess = current_utilization - OPTIMAL_UTILIZATION_BPS;
+            let decrease_amount = excess
+                .saturating_mul(current_utilization)
+                .checked_div(BPS_SCALE)
+                .unwrap_or(0);
+            (AllocationAction::Decrease, decrease_amount)
+        };
+
+        recommendations.push_back(AllocationRecommendation {
+            asset: pool.clone(),
+            current_utilization_bps: current_utilization,
+            recommended_allocation_bps: OPTIMAL_UTILIZATION_BPS,
+            action,
+            amount,
+        });
+    }
+
+    let avg_utilization = if pool_count > 0 {
+        total_utilization.checked_div(pool_count).unwrap_or(0)
+    } else {
+        0
+    };
+
+    // Estimate yield improvement: closer to optimal = better yield
+    let efficiency = if avg_utilization <= OPTIMAL_UTILIZATION_BPS {
+        avg_utilization
+    } else {
+        // Over-utilization means higher rates but more risk
+        OPTIMAL_UTILIZATION_BPS
+    };
+
+    // Yield improvement estimate: moving from current to optimal
+    let yield_improvement = if avg_utilization < OPTIMAL_UTILIZATION_BPS {
+        (OPTIMAL_UTILIZATION_BPS - avg_utilization).checked_div(100).unwrap_or(0)
+    } else {
+        0
+    };
+
+    Ok(OptimizationResult {
+        recommendations,
+        total_capital_efficiency_bps: efficiency,
+        estimated_yield_improvement_bps: yield_improvement,
+    })
+}
+
+/// Update the utilization snapshot for a pool.
+///
+/// Should be called whenever deposits/withdrawals/borrows change pool state.
+pub fn update_pool_utilization(
+    env: &Env,
+    asset: &Address,
+    utilization_bps: i128,
+) {
+    let key = AmmLendingKey::PoolUtilization(asset.clone());
+    env.storage().persistent().set(&key, &utilization_bps);
+}
+
+/// Get the current utilization snapshot for a pool.
+pub fn get_pool_utilization(env: &Env, asset: &Address) -> i128 {
+    let key = AmmLendingKey::PoolUtilization(asset.clone());
+    env.storage()
+        .persistent()
+        .get::<AmmLendingKey, i128>(&key)
+        .unwrap_or(0)
+}
