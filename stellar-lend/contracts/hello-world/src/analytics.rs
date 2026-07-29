@@ -71,6 +71,12 @@ pub enum AnalyticsDataKey {
     AlertThresholds,
     /// #672 — bounded log of triggered alerts (for audit/dedup): Vec<TriggeredAlert>
     TriggeredAlerts,
+    /// Real-time collateral ratio monitoring snapshots: Vec<CollateralRatioSnapshot>
+    CollateralRatioSnapshots,
+    /// Historical collateral ratio trends: Vec<CollateralRatioTrend>
+    CollateralRatioHistory,
+    /// Risk threshold configuration for collateral ratios: CollateralRiskThresholds
+    CollateralRiskThresholds,
 }
 
 /// Snapshot of protocol-wide metrics.
@@ -918,6 +924,242 @@ pub fn check_metric_alerts(env: &Env) -> Result<Vec<Symbol>, AnalyticsError> {
 }
 
 const MAX_TRIGGERED_ALERTS: u32 = 200;
+
+// ─────────────────────────────────────────────────────────────────────────
+// Real-time Collateral Ratio Monitoring
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Maximum collateral ratio snapshots retained (oldest pruned first)
+const MAX_COLLATERAL_SNAPSHOTS: u32 = 100;
+
+/// Maximum historical collateral ratio trends retained
+const MAX_COLLATERAL_HISTORY: u32 = 90;
+
+/// A real-time snapshot of collateral ratio metrics for an asset
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollateralRatioSnapshot {
+    pub asset: Symbol,
+    pub current_ratio: i128,      // basis points
+    pub required_ratio: i128,     // basis points
+    pub health_factor: i128,
+    pub risk_level: Symbol,       // "safe", "warning", "danger", "critical"
+    pub collateral_value: i128,
+    pub debt_value: i128,
+    pub timestamp: u64,
+}
+
+/// Historical trend data for collateral ratio monitoring
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollateralRatioTrend {
+    pub asset: Symbol,
+    pub timestamp: u64,
+    pub avg_health_factor: i128,
+    pub min_health_factor: i128,
+    pub max_health_factor: i128,
+    pub position_count: u64,
+    pub danger_count: u64,
+    pub critical_count: u64,
+}
+
+/// Risk threshold configuration for collateral ratios
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CollateralRiskThresholds {
+    pub safe_threshold: i128,      // health factor >= this
+    pub warning_threshold: i128,   // health factor >= this
+    pub danger_threshold: i128,    // health factor >= this
+}
+
+/// Default risk thresholds
+const DEFAULT_THRESHOLDS: CollateralRiskThresholds = CollateralRiskThresholds {
+    safe_threshold: 20_000,      // 2.0x
+    warning_threshold: 15_000,   // 1.5x
+    danger_threshold: 11_000,    // 1.1x
+};
+
+/// Record a new collateral ratio snapshot for an asset
+pub fn record_collateral_ratio_snapshot(
+    env: &Env,
+    asset: Symbol,
+    current_ratio: i128,
+    required_ratio: i128,
+    collateral_value: i128,
+    debt_value: i128,
+) -> Result<CollateralRatioSnapshot, AnalyticsError> {
+    let health_factor = if required_ratio == 0 {
+        i128::MAX
+    } else {
+        (current_ratio * 10_000)
+            .checked_div(required_ratio)
+            .ok_or(AnalyticsError::Overflow)?
+    };
+
+    let risk_level = classify_collateral_risk_level(env, health_factor);
+
+    let snapshot = CollateralRatioSnapshot {
+        asset: asset.clone(),
+        current_ratio,
+        required_ratio,
+        health_factor,
+        risk_level: risk_level.clone(),
+        collateral_value,
+        debt_value,
+        timestamp: env.ledger().timestamp(),
+    };
+
+    let key = AnalyticsDataKey::CollateralRatioSnapshots;
+    let mut snapshots: Vec<CollateralRatioSnapshot> =
+        env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
+    
+    // Update existing snapshot for this asset or add new one
+    let mut found = false;
+    for i in 0..snapshots.len() {
+        if snapshots.get(i).unwrap().asset == asset {
+            snapshots.set(i, snapshot.clone());
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        snapshots.push_back(snapshot.clone());
+    }
+
+    // Trim if exceeding max size
+    while snapshots.len() > MAX_COLLATERAL_SNAPSHOTS {
+        snapshots.remove(0);
+    }
+
+    env.storage().persistent().set(&key, &snapshots);
+
+    Ok(snapshot)
+}
+
+/// Get all current collateral ratio snapshots
+pub fn get_collateral_ratio_snapshots(env: &Env) -> Vec<CollateralRatioSnapshot> {
+    env.storage()
+        .persistent()
+        .get(&AnalyticsDataKey::CollateralRatioSnapshots)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Get collateral ratio snapshot for a specific asset
+pub fn get_collateral_ratio_snapshot(env: &Env, asset: Symbol) -> Option<CollateralRatioSnapshot> {
+    let snapshots = get_collateral_ratio_snapshots(env);
+    for i in 0..snapshots.len() {
+        let snapshot = snapshots.get(i)?;
+        if snapshot.asset == asset {
+            return Some(snapshot.clone());
+        }
+    }
+    None
+}
+
+/// Classify collateral risk level based on health factor
+pub fn classify_collateral_risk_level(env: &Env, health_factor: i128) -> Symbol {
+    let thresholds = get_collateral_risk_thresholds(env);
+    
+    if health_factor >= thresholds.safe_threshold {
+        Symbol::new(env, "safe")
+    } else if health_factor >= thresholds.warning_threshold {
+        Symbol::new(env, "warning")
+    } else if health_factor >= thresholds.danger_threshold {
+        Symbol::new(env, "danger")
+    } else {
+        Symbol::new(env, "critical")
+    }
+}
+
+/// Get or initialize collateral risk thresholds
+pub fn get_collateral_risk_thresholds(env: &Env) -> CollateralRiskThresholds {
+    env.storage()
+        .persistent()
+        .get(&AnalyticsDataKey::CollateralRiskThresholds)
+        .unwrap_or(DEFAULT_THRESHOLDS)
+}
+
+/// Update collateral risk thresholds (admin only)
+pub fn set_collateral_risk_thresholds(
+    env: &Env,
+    admin: Address,
+    thresholds: CollateralRiskThresholds,
+) -> Result<(), AnalyticsError> {
+    admin.require_auth();
+    let configured_admin = crate::governance::get_admin(env).ok_or(AnalyticsError::NotInitialized)?;
+    if admin != configured_admin {
+        return Err(AnalyticsError::Unauthorized);
+    }
+
+    env.storage()
+        .persistent()
+        .set(&AnalyticsDataKey::CollateralRiskThresholds, &thresholds);
+    
+    Ok(())
+}
+
+/// Record historical collateral ratio trend data
+pub fn record_collateral_ratio_trend(
+    env: &Env,
+    asset: Symbol,
+    avg_health_factor: i128,
+    min_health_factor: i128,
+    max_health_factor: i128,
+    position_count: u64,
+    danger_count: u64,
+    critical_count: u64,
+) -> Result<CollateralRatioTrend, AnalyticsError> {
+    let trend = CollateralRatioTrend {
+        asset: asset.clone(),
+        timestamp: env.ledger().timestamp(),
+        avg_health_factor,
+        min_health_factor,
+        max_health_factor,
+        position_count,
+        danger_count,
+        critical_count,
+    };
+
+    let key = AnalyticsDataKey::CollateralRatioHistory;
+    let mut history: Vec<CollateralRatioTrend> =
+        env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
+    
+    history.push_back(trend.clone());
+    
+    while history.len() > MAX_COLLATERAL_HISTORY {
+        history.remove(0);
+    }
+
+    env.storage().persistent().set(&key, &history);
+
+    Ok(trend)
+}
+
+/// Get historical collateral ratio trends for an asset
+pub fn get_collateral_ratio_history(env: &Env, asset: Symbol) -> Vec<CollateralRatioTrend> {
+    let history: Vec<CollateralRatioTrend> = env
+        .storage()
+        .persistent()
+        .get(&AnalyticsDataKey::CollateralRatioHistory)
+        .unwrap_or_else(|| Vec::new(env));
+    
+    let mut filtered = Vec::new(env);
+    for i in 0..history.len() {
+        let trend = history.get(i).unwrap();
+        if trend.asset == asset {
+            filtered.push_back(trend.clone());
+        }
+    }
+    filtered
+}
+
+/// Get all historical collateral ratio trends
+pub fn get_all_collateral_ratio_history(env: &Env) -> Vec<CollateralRatioTrend> {
+    env.storage()
+        .persistent()
+        .get(&AnalyticsDataKey::CollateralRatioHistory)
+        .unwrap_or_else(|| Vec::new(env))
+}
 
 fn check_metric_alerts_internal(env: &Env, snapshot: &MetricsSnapshot) -> Vec<Symbol> {
     let thresholds = get_metric_alert_thresholds(env);
