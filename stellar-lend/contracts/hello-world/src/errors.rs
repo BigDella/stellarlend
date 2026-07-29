@@ -374,6 +374,10 @@ impl_from_error!(DebtTokenError, {
     DebtTokenError::ZeroAddress => LendingError::InvalidParameter,
     DebtTokenError::AlreadyTokenized => LendingError::AlreadyExists,
     DebtTokenError::PositionNotFound => LendingError::DataNotFound,
+    DebtTokenError::NotListed => LendingError::DataNotFound,
+    DebtTokenError::AlreadyListed => LendingError::AlreadyExists,
+    DebtTokenError::NotSeller => LendingError::Unauthorized,
+    DebtTokenError::InvalidPrice => LendingError::InvalidParameter,
 });
 
 impl From<CrossAssetError> for LendingError {

@@ -347,6 +347,44 @@ pub fn get_accrued_lp_fees(env: &Env, asset: &Address) -> i128 {
         .unwrap_or(0)
 }
 
+/// Auto-compound accrued LP fees back into the LP position (issue #666,
+/// minimal slice).
+///
+/// This is the honest, tractable subset of "yield farming optimizer with
+/// auto-compounding": it reinvests fees `record_lp_fees` has already accrued
+/// back into `LpTokenBalance` via the same simplified 1:1 accounting
+/// `wrap_deposit_to_lp` uses (this module's LP wrap is itself a simplified
+/// stand-in for a real AMM `add_liquidity` call — see `wrap_deposit_to_lp`'s
+/// own comment). Deliberately does NOT include: a yield-optimization
+/// algorithm across pools, strategy backtesting, Sharpe-ratio risk metrics,
+/// a strategy marketplace, or yield alerts — those are separate, much larger
+/// deliverables (backtesting alone needs historical price/utilization data
+/// this contract doesn't retain). See the PR description for the full
+/// #664-#667 disposition.
+///
+/// Zeroes `AccruedLpFees(asset)` and adds the same amount to
+/// `LpTokenBalance(asset)`. A no-op (returns `Ok(0)`) when there's nothing
+/// accrued, rather than erroring, since "nothing to compound yet" is a normal
+/// steady state, not a caller mistake.
+pub fn compound_lp_fees(env: &Env, admin: Address, asset: Address) -> Result<i128, AmmError> {
+    require_amm_admin(env, &admin)?;
+
+    let fees_key = AmmLendingKey::AccruedLpFees(asset.clone());
+    let accrued: i128 = env.storage().persistent().get(&fees_key).unwrap_or(0);
+    if accrued <= 0 {
+        return Ok(0);
+    }
+
+    let lp_key = AmmLendingKey::LpTokenBalance(asset.clone());
+    let current_lp: i128 = env.storage().persistent().get(&lp_key).unwrap_or(0);
+    env.storage()
+        .persistent()
+        .set(&lp_key, &current_lp.saturating_add(accrued));
+    env.storage().persistent().set(&fees_key, &0i128);
+
+    Ok(accrued)
+}
+
 // ─── Impermanent Loss Monitoring ─────────────────────────────────────────────
 
 /// Update impermanent loss tracking with current price.
