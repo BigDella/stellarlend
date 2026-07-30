@@ -11,6 +11,7 @@
 use soroban_sdk::{testutils::Address as _, Address, Env};
 
 use crate::{HelloContract, HelloContractClient};
+use stellarlend_lending::{LendingContract, LendingContractClient};
 
 // ── Shared position snapshot ──────────────────────────────────────────────
 
@@ -104,5 +105,79 @@ impl<'a> HwAdapter<'a> {
             collateral: pos.collateral,
             debt: pos.debt,
         }
+    }
+}
+
+// ── Cross-implementation adapter trait ────────────────────────────────────
+//
+// Lets a single set of property tests run against genuinely different
+// contract implementations (not just two instances of the same one).
+// Only `deposit`/`get_position` are part of this trait: hello-world and
+// lending have incompatible domain models for borrow (hello-world borrows
+// against previously-deposited collateral; lending's `borrow` atomically
+// deposits new collateral *and* borrows in the same call, and always
+// requires a positive `collateral_amount`), so forcing a 1:1 comparison
+// there would require synthetic workarounds that misrepresent what's being
+// tested. See "Known Structural Differences" in DIFFERENTIAL_TEST_REPORT.md.
+pub trait ContractAdapter {
+    fn deposit(&self, user: &Address, amount: i128) -> Result<i128, ()>;
+    fn get_position(&self, user: &Address) -> PositionSnapshot;
+}
+
+impl<'a> ContractAdapter for HwAdapter<'a> {
+    fn deposit(&self, user: &Address, amount: i128) -> Result<i128, ()> {
+        HwAdapter::deposit(self, user, amount)
+    }
+
+    fn get_position(&self, user: &Address) -> PositionSnapshot {
+        HwAdapter::get_position(self, user)
+    }
+}
+
+// ── lending adapter — a genuinely separate contract implementation ───────
+
+pub struct LendingAdapter<'a> {
+    pub client: LendingContractClient<'a>,
+    pub env: &'a Env,
+    pub admin: Address,
+    pub asset: Address,
+}
+
+impl<'a> LendingAdapter<'a> {
+    pub fn new(env: &'a Env) -> Self {
+        let contract_id = env.register(LendingContract, ());
+        let client = LendingContractClient::new(env, &contract_id);
+        let admin = Address::generate(env);
+        let asset = Address::generate(env);
+        // debt_ceiling / min_borrow_amount are unused by the deposit-only
+        // comparison but required by `initialize`.
+        client.initialize(&admin, &1_000_000_000_000, &1);
+        Self { client, env, admin, asset }
+    }
+
+    pub fn deposit(&self, user: &Address, amount: i128) -> Result<i128, ()> {
+        self.client
+            .try_deposit_collateral(user, &self.asset, &amount)
+            .map_err(|_| ())
+            .and_then(|r| r.map_err(|_| ()))
+            .map(|_| self.get_position(user).collateral)
+    }
+
+    pub fn get_position(&self, user: &Address) -> PositionSnapshot {
+        let pos = self.client.get_user_position(user);
+        PositionSnapshot {
+            collateral: pos.collateral_balance,
+            debt: pos.debt_balance,
+        }
+    }
+}
+
+impl<'a> ContractAdapter for LendingAdapter<'a> {
+    fn deposit(&self, user: &Address, amount: i128) -> Result<i128, ()> {
+        LendingAdapter::deposit(self, user, amount)
+    }
+
+    fn get_position(&self, user: &Address) -> PositionSnapshot {
+        LendingAdapter::get_position(self, user)
     }
 }

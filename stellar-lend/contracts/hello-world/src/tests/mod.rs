@@ -1,5 +1,6 @@
 pub mod diff_harness;
 pub mod differential_test;
+pub mod hello_world_vs_lending_test;
 pub mod migration_verification_test;
 pub mod access_control_regression_test;
 pub mod admin_test;
@@ -54,9 +55,13 @@ pub mod test_utils;
 pub mod amm_compound_test;
 
 // Property-based tests (proptest)
-pub mod prop_arithmetic_test;
-pub mod prop_interest_test;
-pub mod prop_liquidation_test;
+//
+// prop_arithmetic_test, prop_interest_test, prop_liquidation_test, and
+// prop_deposit_test were declared here by a prior refactor but their source
+// files were never added for this crate (the equivalent property tests live
+// in the separate `lending` crate as borrow_prop_test.rs, interest_rate_prop_test.rs,
+// invariant_prop_test.rs, and deposit_prop_test.rs). Declaring a `mod` for a
+// nonexistent file is a hard compile error, so the phantom declarations are
+// removed rather than left broken.
 pub mod prop_fees_test;
 pub mod prop_supply_cap_test;
-mod prop_deposit_test;
