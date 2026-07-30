@@ -59,6 +59,7 @@ import plannerRoutes from './routes/planner.routes';
 import feeTierRoutes from './routes/fee-tiers.routes';
 import reinvestmentRoutes from './routes/reinvestment.routes';
 import collateralRatioRoutes from './routes/collateralRatio.routes';
+import complianceRoutes from './routes/v1/compliance';
 
 import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
@@ -259,6 +260,7 @@ app.use('/api/planner', plannerRoutes);
 app.use('/api/fee-tiers', feeTierRoutes);
 app.use('/api/reinvestment', reinvestmentRoutes);
 app.use('/api/collateral-ratio', collateralRatioRoutes);
+app.use('/api/compliance', complianceRoutes);
 
 app.use(errorHandler);
 
