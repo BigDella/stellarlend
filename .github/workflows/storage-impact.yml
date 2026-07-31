@@ -1,0 +1,75 @@
+name: Storage Impact Analysis
+
+on: workflow_dispatch
+
+concurrency:
+  group: storage-impact-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  storage-impact:
+    name: Analyze Contract Storage Changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout head commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+
+      - name: Checkout base commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run storage analyzer
+        id: analyze
+        run: |
+          chmod +x head/scripts/storage-analyzer/analyze.sh
+          chmod +x head/scripts/storage-analyzer/extract-storage.sh
+          head/scripts/storage-analyzer/analyze.sh \
+            "${{ github.workspace }}/base" \
+            "${{ github.workspace }}/head" \
+            > "${{ runner.temp }}/storage-report.md"
+        continue-on-error: true
+
+      - name: Read report
+        id: report
+        run: |
+          {
+            echo "body<<REPORT_EOF"
+            cat "${{ runner.temp }}/storage-report.md"
+            echo "REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Find existing comment
+        uses: peter-evans/find-comment@v3
+        id: find_comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: "## Storage Impact Report"
+
+      - name: Post or update PR comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find_comment.outputs.comment-id }}
+          edit-mode: replace
+          body: ${{ steps.report.outputs.body }}
+
+      - name: Fail on breaking changes
+        if: steps.analyze.outcome == 'failure'
+        run: |
+          echo "::error::Breaking storage layout changes detected. See the PR comment for details."
+          exit 1

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as lendingController from '../controllers/lending.controller';
+import { redisCacheService } from '../services/redisCache.service';
 
 const router: Router = Router();
 
@@ -114,5 +115,20 @@ router.get('/', lendingController.healthCheck);
  *                       description: Number of requests that timed out waiting for coalescing
  */
 router.get('/coalescing', lendingController.coalescingMetrics);
+
+/**
+ * @openapi
+ * /health/cache-metrics:
+ *   get:
+ *     summary: Redis cache performance metrics
+ *     tags:
+ *       - Health
+ *     responses:
+ *       200:
+ *         description: Cache hit/miss/error counters
+ */
+router.get('/cache-metrics', (_req, res) => {
+  res.json(redisCacheService.getMetrics());
+});
 
 export default router;

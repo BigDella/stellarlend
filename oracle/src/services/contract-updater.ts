@@ -180,7 +180,7 @@ export class ContractUpdater {
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(operation)
-      .setTimeout(30)
+      .setTimeout(parseInt(process.env.TX_TIMEOUT || "30"))
       .build();
 
     const simulated = await this.server.simulateTransaction(transaction);

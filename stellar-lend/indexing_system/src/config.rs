@@ -55,6 +55,9 @@ pub struct IndexerConfig {
     /// Defaults to 4.  Set higher for chains with many events per block.
     pub worker_count: usize,
 
+    /// Worker concurrency for parallel indexing (optional)
+    pub worker_concurrency: Option<usize>,
+
     /// Block backlog (in blocks) above which a warning is emitted.
     /// Defaults to 1000.
     pub backlog_alert_threshold: u64,

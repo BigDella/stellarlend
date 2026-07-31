@@ -39,7 +39,11 @@ pub struct DepositCollateral {
     pub amount: i128,
     pub asset: Address,
     pub last_deposit_time: u64,
+    /// Expiration timestamp (0 = never expire)
+    pub expires_at: u64,
 }
+
+const DEPOSIT_POSITION_TTL: u64 = 30 * 24 * 3600; // 30 days
 
 /// Deposit collateral into the protocol
 ///
@@ -90,6 +94,7 @@ pub fn deposit(
         .checked_add(amount)
         .ok_or(DepositError::Overflow)?;
     position.last_deposit_time = env.ledger().timestamp();
+    position.expires_at = env.ledger().timestamp().saturating_add(DEPOSIT_POSITION_TTL);
     position.asset = asset.clone();
 
     // Save state IMMEDIATELY (before any external calls)
@@ -114,11 +119,12 @@ pub fn initialize_deposit_settings(
     deposit_cap: i128,
     min_deposit_amount: i128,
 ) -> Result<(), DepositError> {
+    // Globals are frequently accessed; keep them in instance storage
     env.storage()
-        .persistent()
+        .instance()
         .set(&DepositDataKey::CapAmount, &deposit_cap);
     env.storage()
-        .persistent()
+        .instance()
         .set(&DepositDataKey::MinAmount, &min_deposit_amount);
     Ok(())
 }
@@ -128,14 +134,35 @@ pub fn get_user_collateral(env: &Env, user: &Address, asset: &Address) -> Deposi
 }
 
 fn get_deposit_position(env: &Env, user: &Address, asset: &Address) -> DepositCollateral {
-    env.storage()
+    // Return stored position if present and not expired. If expired, clean up and return default.
+    let now = env.ledger().timestamp();
+    if let Some(mut stored) = env
+        .storage()
         .persistent()
-        .get(&DepositDataKey::UserCollateral(user.clone()))
-        .unwrap_or(DepositCollateral {
+        .get::<DepositDataKey, DepositCollateral>(&DepositDataKey::UserCollateral(user.clone()))
+    {
+        if stored.expires_at != 0 && stored.expires_at <= now {
+            // expired -> clear and return default
+            let default = DepositCollateral {
+                amount: 0,
+                asset: asset.clone(),
+                last_deposit_time: now,
+                expires_at: 0,
+            };
+            env.storage()
+                .persistent()
+                .set(&DepositDataKey::UserCollateral(user.clone()), &default);
+            return default;
+        }
+        stored
+    } else {
+        DepositCollateral {
             amount: 0,
             asset: asset.clone(),
-            last_deposit_time: env.ledger().timestamp(),
-        })
+            last_deposit_time: now,
+            expires_at: 0,
+        }
+    }
 }
 
 fn save_deposit_position(env: &Env, user: &Address, position: &DepositCollateral) {
@@ -146,29 +173,51 @@ fn save_deposit_position(env: &Env, user: &Address, position: &DepositCollateral
 
 fn get_total_deposits(env: &Env) -> i128 {
     env.storage()
-        .persistent()
+        .instance()
         .get(&DepositDataKey::TotalAmount)
         .unwrap_or(0)
 }
 
 fn set_total_deposits(env: &Env, amount: i128) {
     env.storage()
-        .persistent()
+        .instance()
         .set(&DepositDataKey::TotalAmount, &amount);
 }
 
 fn get_deposit_cap(env: &Env) -> i128 {
     env.storage()
-        .persistent()
+        .instance()
         .get(&DepositDataKey::CapAmount)
         .unwrap_or(i128::MAX)
 }
 
 fn get_min_deposit_amount(env: &Env) -> i128 {
     env.storage()
-        .persistent()
+        .instance()
         .get(&DepositDataKey::MinAmount)
         .unwrap_or(0)
+}
+
+/// Cleanup helper: explicitly remove expired user deposit position if expired
+pub fn cleanup_expired_deposit_position(env: &Env, user: Address, asset: Address) {
+    let now = env.ledger().timestamp();
+    if let Some(stored) = env
+        .storage()
+        .persistent()
+        .get::<DepositDataKey, DepositCollateral>(&DepositDataKey::UserCollateral(user.clone()))
+    {
+        if stored.expires_at != 0 && stored.expires_at <= now {
+            let default = DepositCollateral {
+                amount: 0,
+                asset: asset.clone(),
+                last_deposit_time: now,
+                expires_at: 0,
+            };
+            env.storage()
+                .persistent()
+                .set(&DepositDataKey::UserCollateral(user), &default);
+        }
+    }
 }
 
 fn emit_deposit_event(env: &Env, user: Address, asset: Address, amount: i128, new_balance: i128) {

@@ -14,6 +14,8 @@ import type {
   SupportedAsset,
 } from './types/index.js';
 import { configureLogger, logger } from './utils/logger.js';
+import { developmentOverrides } from './config/development.js';
+import { productionOverrides } from './config/production.js';
 
 export type { OracleServiceConfig } from './types/index.js';
 
@@ -101,6 +103,7 @@ const envSchema = z
     CIRCUIT_BREAKER_FAILURE_THRESHOLD: z.coerce.number().int().positive().default(3),
     CIRCUIT_BREAKER_BACKOFF_MS: z.coerce.number().positive().default(30_000),
     LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+    METRICS_PORT: z.coerce.number().int().positive().optional(),
   })
   .superRefine((env, ctx) => {
     const networkDefaults = NETWORK_DEFAULTS[env.STELLAR_NETWORK as keyof typeof NETWORK_DEFAULTS];
@@ -232,8 +235,20 @@ export function isSupportedAsset(symbol: string): symbol is SupportedAsset {
 /**
  * Build and export the service configuration
  */
+function getEnvOverrides(): Partial<OracleServiceConfig> {
+  const nodeEnv = process.env.NODE_ENV || 'development';
+  switch (nodeEnv) {
+    case 'production':
+      return productionOverrides;
+    case 'development':
+    default:
+      return developmentOverrides;
+  }
+}
+
 export function loadConfig(): OracleServiceConfig {
   const env = parseEnv();
+  const envOverrides = getEnvOverrides();
 
   // Get network-specific defaults
   const networkDefaults = NETWORK_DEFAULTS[env.STELLAR_NETWORK as keyof typeof NETWORK_DEFAULTS];
@@ -249,18 +264,19 @@ export function loadConfig(): OracleServiceConfig {
     maxFee: env.STELLAR_MAX_FEE,
     contractId: env.CONTRACT_ID,
     adminSecretKey: env.ADMIN_SECRET_KEY,
-    dryRun: env.DRY_RUN,
-    updateIntervalMs: env.UPDATE_INTERVAL_MS,
-    maxPriceDeviationPercent: env.MAX_PRICE_DEVIATION_PERCENT,
-    priceStaleThresholdSeconds: env.PRICE_STALENESS_THRESHOLD_SECONDS,
-    cacheTtlSeconds: env.CACHE_TTL_SECONDS,
+    dryRun: envOverrides.dryRun ?? env.DRY_RUN,
+    updateIntervalMs: envOverrides.updateIntervalMs ?? env.UPDATE_INTERVAL_MS,
+    maxPriceDeviationPercent: envOverrides.maxPriceDeviationPercent ?? env.MAX_PRICE_DEVIATION_PERCENT,
+    priceStaleThresholdSeconds: envOverrides.priceStaleThresholdSeconds ?? env.PRICE_STALENESS_THRESHOLD_SECONDS,
+    cacheTtlSeconds: envOverrides.cacheTtlSeconds ?? env.CACHE_TTL_SECONDS,
     redisUrl: env.REDIS_URL || undefined,
-    logLevel: env.LOG_LEVEL,
+    logLevel: envOverrides.logLevel ?? env.LOG_LEVEL,
     providers: getProviderConfigs(env),
-    circuitBreaker: {
+    circuitBreaker: envOverrides.circuitBreaker ?? {
       failureThreshold: env.CIRCUIT_BREAKER_FAILURE_THRESHOLD,
       backoffMs: env.CIRCUIT_BREAKER_BACKOFF_MS,
     },
+    metricsPort: env.METRICS_PORT,
   };
 }
 

@@ -70,6 +70,13 @@ pub struct AdapterVerificationResult {
     pub verification_data: Vec<u8>,
 }
 
+#[contracttype]
+#[derive(Clone)]
+pub enum AdapterDataKey {
+    Adapter(Address),
+    AdapterList,
+}
+
 /// TokenAdapterTrait - Core trait for all token adapters
 ///
 /// This trait defines the standard interface that all token adapters
@@ -85,7 +92,13 @@ pub trait TokenAdapterTrait {
     fn is_enabled(&self) -> bool;
 
     /// Transfer tokens from one address to another
-    fn transfer(&self, env: &Env, from: &Address, to: &Address, amount: i128) -> Result<(), AdapterError>;
+    fn transfer(
+        &self,
+        env: &Env,
+        from: &Address,
+        to: &Address,
+        amount: i128,
+    ) -> Result<(), AdapterError>;
 
     /// Get the balance of an address
     fn balance_of(&self, env: &Env, address: &Address) -> Result<i128, AdapterError>;
@@ -93,14 +106,31 @@ pub trait TokenAdapterTrait {
     /// Get the total supply of the token
     fn total_supply(&self, env: &Env) -> Result<i128, AdapterError>;
 
-    /// Approve spender to transfer tokens
-    fn approve(&self, env: &Env, spender: &Address, amount: i128) -> Result<(), AdapterError>;
+    /// Approve spender to transfer tokens from the owner
+    fn approve(
+        &self,
+        env: &Env,
+        owner: &Address,
+        spender: &Address,
+        amount: i128,
+    ) -> Result<(), AdapterError>;
 
     /// Get approved allowance
-    fn allowance(&self, env: &Env, owner: &Address, spender: &Address) -> Result<i128, AdapterError>;
+    fn allowance(
+        &self,
+        env: &Env,
+        owner: &Address,
+        spender: &Address,
+    ) -> Result<i128, AdapterError>;
 
     /// Transfer tokens from one address to another (with allowance)
-    fn transfer_from(&self, env: &Env, from: &Address, to: &Address, amount: i128) -> Result<(), AdapterError>;
+    fn transfer_from(
+        &self,
+        env: &Env,
+        from: &Address,
+        to: &Address,
+        amount: i128,
+    ) -> Result<(), AdapterError>;
 }
 
 /// Factory for creating token adapters
@@ -114,7 +144,7 @@ pub mod factory {
     ) -> Result<AdapterConfig, AdapterError> {
         // Detect token type and create appropriate adapter
         let adapter_type = detect_token_type(env, &token_address)?;
-        
+
         Ok(AdapterConfig {
             adapter_type,
             token_address,
@@ -124,7 +154,10 @@ pub mod factory {
     }
 
     /// Detect the type of token at the given address
-    fn detect_token_type(env: &Env, token_address: &Address) -> Result<TokenAdapterType, AdapterError> {
+    fn detect_token_type(
+        _env: &Env,
+        _token_address: &Address,
+    ) -> Result<TokenAdapterType, AdapterError> {
         // Token type detection logic
         // In practice, this would query the token contract to determine its type
         // For now, we default to ERC20 as the most common type
@@ -132,14 +165,10 @@ pub mod factory {
     }
 
     /// Register a new adapter with the protocol
-    pub fn register_adapter(
-        env: &Env,
-        config: AdapterConfig,
-    ) -> Result<(), AdapterError> {
+    pub fn register_adapter(env: &Env, config: AdapterConfig) -> Result<(), AdapterError> {
         if !config.enabled {
             return Err(AdapterError::InvalidConfig);
         }
-        // Store adapter configuration
-        Ok(())
+        crate::token_adapter_verify::register_adapter(env, config)
     }
 }

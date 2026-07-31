@@ -110,8 +110,21 @@ impl LendingHarness {
         );
     }
 
+    fn bounded_amount(raw: i64) -> i128 {
+        i128::from(raw.unsigned_abs() % 1_000_000_000).max(1)
+    }
+
+    fn liquidate_from_action(&self, client: &LendingContractClient<'_>, action: ActionBytes) {
+        let liquidator = self.user(action.user());
+        let borrower = self.user(action.asset_a());
+        let debt_asset = self.asset(action.asset_b());
+        let collateral_asset = self.asset(action.u32_param() as u8);
+        let amt = Self::bounded_amount(action.i64_a());
+        let _ = client.try_liquidate(&liquidator, &borrower, &debt_asset, &collateral_asset, &amt);
+    }
+
     fn act(&self, client: &LendingContractClient<'_>, action: ActionBytes) {
-        match action.kind() % 10 {
+        match action.kind() % 11 {
             // 0: deposit(vault)
             0 => {
                 let user = self.user(action.user());
@@ -184,12 +197,66 @@ impl LendingHarness {
                 self.set_time_delta(delta);
             }
             // 9: call views/getters
-            _ => {
+            9 => {
                 let user = self.user(action.user());
                 let _ = client.get_user_position(&user);
                 let _ = client.get_health_factor(&user);
                 let _ = client.get_collateral_value(&user);
                 let _ = client.get_debt_value(&user);
+            }
+            // 10: liquidate
+            _ => self.liquidate_from_action(client, action),
+        }
+    }
+
+    fn act_critical(&self, client: &LendingContractClient<'_>, action: ActionBytes) {
+        match action.kind() % 6 {
+            // 0: deposit vault collateral
+            0 => {
+                let user = self.user(action.user());
+                let asset = self.asset(action.asset_a());
+                let amt = Self::bounded_amount(action.i64_a());
+                let _ = client.try_deposit(&user, &asset, &amt);
+            }
+            // 1: borrow with over-collateralized input so the fuzzer reaches debt states.
+            1 => {
+                let user = self.user(action.user());
+                let debt_asset = self.asset(action.asset_a());
+                let collateral_asset = self.asset(action.asset_b());
+                let borrow_amt = Self::bounded_amount(action.i64_a());
+                let extra_collateral = Self::bounded_amount(action.i64_b());
+                let collateral_amt = borrow_amt
+                    .saturating_mul(2)
+                    .saturating_add(extra_collateral);
+                let _ = client.try_borrow(
+                    &user,
+                    &debt_asset,
+                    &borrow_amt,
+                    &collateral_asset,
+                    &collateral_amt,
+                );
+            }
+            // 2: repay debt.
+            2 => {
+                let user = self.user(action.user());
+                let asset = self.asset(action.asset_a());
+                let amt = Self::bounded_amount(action.i64_a());
+                let _ = client.try_repay(&user, &asset, &amt);
+            }
+            // 3: liquidate debt positions.
+            3 => self.liquidate_from_action(client, action),
+            // 4: mutate oracle prices to stress collateral and liquidation views.
+            4 => {
+                let asset = self.asset(action.asset_a());
+                self.set_oracle_price(&asset, action.i64_a());
+            }
+            // 5: advance ledger time and query the accounting views.
+            _ => {
+                self.set_time_delta(action.u64_tail() % 604_800);
+                let user = self.user(action.user());
+                let _ = client.get_user_debt(&user);
+                let _ = client.get_user_position(&user);
+                let _ = client.get_health_factor(&user);
             }
         }
     }
@@ -223,4 +290,13 @@ pub fn run(data: &[u8]) {
         h.act(&client, action);
     }
     h.assert_invariants(&client);
+}
+
+pub fn run_critical(data: &[u8]) {
+    let h = LendingHarness::new();
+    let client = LendingContractClient::new(&h.env, &h.contract_id);
+    for action in parse_actions(data, MAX_ACTIONS) {
+        h.act_critical(&client, action);
+        h.assert_invariants(&client);
+    }
 }

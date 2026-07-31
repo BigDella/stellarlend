@@ -10,9 +10,13 @@
 extern crate alloc;
 use alloc::{format, vec::Vec};
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String as SorobanString};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, BytesN, Env, String as SorobanString,
+};
 
 use crate::{LendingContract, LendingContractClient, UpgradeStage};
+use crate::upgrade::STANDARD_TIMELOCK_SECS;
 
 // ═══════════════════════════════════════════════════════
 // Test Helpers
@@ -36,6 +40,21 @@ fn setup_with_upgrade_init(
     let (client, admin) = setup_contract(env);
     client.upgrade_init(&admin, &hash(env, 1), &required_approvals);
     (client, admin)
+}
+
+/// Queue the timelock, advance the ledger past it, then execute — mirrors the
+/// production upgrade flow without duplicating boilerplate in every test.
+fn queue_and_execute(
+    env: &Env,
+    client: &LendingContractClient,
+    admin: &Address,
+    proposal_id: u64,
+) {
+    client.upgrade_queue_timelock(admin, &proposal_id);
+    env.ledger().with_mut(|li| {
+        li.timestamp += STANDARD_TIMELOCK_SECS + 1;
+    });
+    client.upgrade_execute(admin, &proposal_id);
 }
 
 // Seed user state with data store entries
@@ -65,7 +84,7 @@ fn test_upgrade_preserves_admin_and_version() {
 
     // Propose and execute upgrade
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     // Verify version and hash updated
     assert_eq!(client.current_version(), 1);
@@ -96,7 +115,7 @@ fn test_upgrade_preserves_data_store_entries() {
 
     // Execute upgrade
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     // Verify all data preserved
     assert_eq!(client.data_load(&key1), val1);
@@ -119,7 +138,7 @@ fn test_upgrade_preserves_multiple_user_states() {
 
     // Execute upgrade
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &2);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     // Verify all user states preserved
     assert_eq!(client.data_entry_count(), pre_upgrade_count);
@@ -148,19 +167,19 @@ fn test_sequential_upgrades_preserve_state() {
 
     // Upgrade v0 -> v1
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
     assert_eq!(client.current_version(), 1);
     assert_eq!(client.data_load(&key), val);
 
     // Upgrade v1 -> v2
     let p2 = client.upgrade_propose(&admin, &hash(&env, 3), &2);
-    client.upgrade_execute(&admin, &p2);
+    queue_and_execute(&env, &client, &admin, p2);
     assert_eq!(client.current_version(), 2);
     assert_eq!(client.data_load(&key), val);
 
     // Upgrade v2 -> v5 (skip versions)
     let p3 = client.upgrade_propose(&admin, &hash(&env, 4), &5);
-    client.upgrade_execute(&admin, &p3);
+    queue_and_execute(&env, &client, &admin, p3);
     assert_eq!(client.current_version(), 5);
     assert_eq!(client.data_load(&key), val);
 }
@@ -180,7 +199,7 @@ fn test_upgrade_with_state_modifications_between_versions() {
 
     // Upgrade to v1
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
 
     // Modify state in v1
     let k2 = SorobanString::from_str(&env, "k2");
@@ -189,7 +208,7 @@ fn test_upgrade_with_state_modifications_between_versions() {
 
     // Upgrade to v2
     let p2 = client.upgrade_propose(&admin, &hash(&env, 3), &2);
-    client.upgrade_execute(&admin, &p2);
+    queue_and_execute(&env, &client, &admin, p2);
 
     // Verify both states preserved
     assert_eq!(client.data_load(&k1), v1);
@@ -209,7 +228,7 @@ fn test_rollback_restores_previous_version() {
 
     // Execute upgrade v0 -> v1
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
     assert_eq!(client.current_version(), 1);
     assert_eq!(client.current_wasm_hash(), hash(&env, 2));
 
@@ -237,7 +256,7 @@ fn test_rollback_preserves_user_state() {
 
     // Upgrade
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     // Modify state after upgrade
     let key2 = SorobanString::from_str(&env, "new_data");
@@ -260,7 +279,7 @@ fn test_rollback_cannot_be_repeated() {
     let (client, admin) = setup_with_upgrade_init(&env, 1);
 
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
     client.upgrade_rollback(&admin, &proposal_id);
 
     // Second rollback should fail
@@ -275,14 +294,14 @@ fn test_rollback_then_new_upgrade() {
 
     // Upgrade and rollback
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
     client.upgrade_rollback(&admin, &p1);
 
     assert_eq!(client.current_version(), 0);
 
     // New upgrade should work
     let p2 = client.upgrade_propose(&admin, &hash(&env, 3), &1);
-    client.upgrade_execute(&admin, &p2);
+    queue_and_execute(&env, &client, &admin, p2);
     assert_eq!(client.current_version(), 1);
 }
 
@@ -304,7 +323,7 @@ fn test_execute_without_approval_fails() {
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
 
     // Try to execute without threshold - should fail
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 }
 
 #[test]
@@ -315,10 +334,10 @@ fn test_execute_already_executed_proposal_fails() {
     let (client, admin) = setup_with_upgrade_init(&env, 1);
 
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     // Second execution should fail
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 }
 
 #[test]
@@ -330,7 +349,7 @@ fn test_propose_same_version_fails() {
 
     // Upgrade to v1
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
 
     // Try to propose v1 again - should fail
     client.upgrade_propose(&admin, &hash(&env, 3), &1);
@@ -345,7 +364,7 @@ fn test_propose_lower_version_fails() {
 
     // Upgrade to v5
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &5);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
 
     // Try to propose v3 - should fail
     client.upgrade_propose(&admin, &hash(&env, 3), &3);
@@ -379,7 +398,7 @@ fn test_state_modifications_during_proposal_phase() {
     let approver = Address::generate(&env);
     client.upgrade_add_approver(&admin, &approver);
     client.upgrade_approve(&approver, &proposal_id);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     // Verify state preserved
     assert_eq!(client.data_load(&key), val);
@@ -403,7 +422,7 @@ fn test_multiple_pending_proposals() {
     // Approve and execute first proposal
     client.upgrade_approve(&approver1, &p1);
     client.upgrade_approve(&approver2, &p1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
 
     assert_eq!(client.current_version(), 1);
 
@@ -427,7 +446,7 @@ fn test_schema_version_bump_during_upgrade() {
 
     // Upgrade contract
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
 
     // Bump schema version to match new contract
     let memo = SorobanString::from_str(&env, "v1_schema_migration");
@@ -455,7 +474,7 @@ fn test_backup_restore_across_upgrade() {
 
     // Upgrade
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
 
     // Modify state after upgrade
     let k2 = SorobanString::from_str(&env, "k2");
@@ -489,7 +508,7 @@ fn test_migration_with_large_dataset() {
 
     // Upgrade
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
 
     // Verify all data intact
     assert_eq!(client.data_entry_count(), 50);
@@ -513,7 +532,7 @@ fn test_non_admin_cannot_rollback() {
     let (client, admin) = setup_with_upgrade_init(&env, 1);
 
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     let stranger = Address::generate(&env);
     client.upgrade_rollback(&stranger, &proposal_id);
@@ -544,7 +563,7 @@ fn test_approver_permissions_preserved_across_upgrade() {
     // Upgrade
     let p1 = client.upgrade_propose(&admin, &hash(&env, 2), &1);
     client.upgrade_approve(&approver, &p1);
-    client.upgrade_execute(&admin, &p1);
+    queue_and_execute(&env, &client, &admin, p1);
 
     // Approver should still be able to approve new proposals
     let p2 = client.upgrade_propose(&admin, &hash(&env, 3), &2);
@@ -566,7 +585,7 @@ fn test_upgrade_with_empty_data_store() {
     assert_eq!(client.data_entry_count(), 0);
 
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     assert_eq!(client.data_entry_count(), 0);
     assert_eq!(client.current_version(), 1);
@@ -593,7 +612,7 @@ fn test_upgrade_with_max_approvers() {
     }
 
     // Execute
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
     assert_eq!(client.current_version(), 1);
 }
 
@@ -607,7 +626,7 @@ fn test_rapid_version_increments() {
     for version in 1..=10 {
         let hash_byte = (version + 1) as u8;
         let proposal_id = client.upgrade_propose(&admin, &hash(&env, hash_byte), &version);
-        client.upgrade_execute(&admin, &proposal_id);
+        queue_and_execute(&env, &client, &admin, proposal_id);
         assert_eq!(client.current_version(), version);
     }
 }
@@ -629,7 +648,7 @@ fn test_upgrade_preserves_writer_permissions() {
 
     // Upgrade
     let proposal_id = client.upgrade_propose(&admin, &hash(&env, 2), &1);
-    client.upgrade_execute(&admin, &proposal_id);
+    queue_and_execute(&env, &client, &admin, proposal_id);
 
     // Writer can still save after upgrade
     let k2 = SorobanString::from_str(&env, "k2");

@@ -1,0 +1,63 @@
+{
+  "network": "local",
+  "network_passphrase": "Standalone Network ; February 2017",
+  "accounts": {
+    "admin": {
+      "alias": "admin",
+      "description": "Protocol administrator -- owns all deployed contracts",
+      "public_key": "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+      "secret_key": "SCZANGBA5YHTNYVVV3C7CAZMCLXPILHSE6PGYAY2TDGPMHZAPTYERMOF",
+      "initial_xlm": "100000",
+      "roles": ["admin", "deployer"]
+    },
+    "liquidator": {
+      "alias": "liquidator",
+      "description": "Liquidation bot account with pre-approved contracts",
+      "public_key": "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBQ",
+      "secret_key": "SDJCZISO5M5XTQNMCY6NB5HFLCMAWJG3Z3OANDOFFMHBBP6BSLGPWRA",
+      "initial_xlm": "50000",
+      "roles": ["liquidator"]
+    },
+    "user1": {
+      "alias": "user1",
+      "description": "Test borrower -- has active loans",
+      "public_key": "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCQ",
+      "secret_key": "SALKIERTPFBBYMWBE4AFTSONAZM3TCPORJML3VQ5JXVXQSXM3L3VHTLA",
+      "initial_xlm": "10000",
+      "roles": ["borrower"]
+    },
+    "user2": {
+      "alias": "user2",
+      "description": "Test lender -- provides liquidity",
+      "public_key": "GDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDQ",
+      "secret_key": "SDMCXBHPFJPSVY6AFSZZUHQVZWQBM35PUARGFITTXNMFKM7CDCNFZWWR",
+      "initial_xlm": "10000",
+      "roles": ["lender"]
+    },
+    "user3": {
+      "alias": "user3",
+      "description": "Test user -- mixed positions, near-liquidation",
+      "public_key": "GEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEQ",
+      "secret_key": "SBGBNFKFBHH2GP6ZAB4B6FS5GKYRLOS3FPDGEIMZLRF7IYQKJVKBHSIG",
+      "initial_xlm": "10000",
+      "roles": ["borrower", "lender"]
+    },
+    "user4": {
+      "alias": "user4",
+      "description": "Test user -- flash loan user",
+      "public_key": "GFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFQ",
+      "secret_key": "SDHPVEIC3CPGH5D5XKPIIG5IC6B5RPIMHPYUYBLSJWSMRH7VFPJHLXHW",
+      "initial_xlm": "10000",
+      "roles": ["borrower"]
+    },
+    "user5": {
+      "alias": "user5",
+      "description": "Test user -- institutional wallet holder",
+      "public_key": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGQ",
+      "secret_key": "SDQWCJA3Z4M3KTGHAFCXU7FQBYQQHSTBPKRUCZRVCNZSGFFR6BNWI55U",
+      "initial_xlm": "10000",
+      "roles": ["institutional"]
+    }
+  },
+  "note": "These keys are for LOCAL DEVNET ONLY. They are deterministic test keys and must NEVER be used on testnet or mainnet."
+}

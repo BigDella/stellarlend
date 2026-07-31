@@ -1,0 +1,108 @@
+name: Contract Fuzzing
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "stellar-lend/contracts/**"
+      - "stellar-lend/fuzz/**"
+      - "scripts/fuzz/**"
+      - ".github/workflows/contract-fuzz.yml"
+  push:
+    branches: [main, dev]
+    paths:
+      - "stellar-lend/contracts/**"
+      - "stellar-lend/fuzz/**"
+      - "scripts/fuzz/**"
+      - ".github/workflows/contract-fuzz.yml"
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds per fuzz target"
+        required: false
+        default: "1800"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FUZZ_SECONDS: ${{ github.event.inputs.fuzz_seconds || '1800' }}
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - lending_critical
+          - lending_actions
+          - amm_actions
+          - bridge_actions
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang and llvm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo and fuzz artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            stellar-lend/target
+            stellar-lend/fuzz/target
+          key: ${{ runner.os }}-contract-fuzz-${{ hashFiles('stellar-lend/Cargo.lock', 'stellar-lend/**/*.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-contract-fuzz-
+
+      - name: Install cargo-fuzz
+        run: |
+          if ! command -v cargo-fuzz >/dev/null 2>&1; then
+            cargo +nightly install cargo-fuzz --locked
+          fi
+
+      - name: Validate corpora
+        run: bash scripts/fuzz/check_corpus.sh
+
+      - name: List fuzz targets
+        working-directory: stellar-lend
+        run: cargo +nightly fuzz list
+
+      - name: Run 30 minute fuzz target
+        working-directory: stellar-lend
+        run: |
+          mkdir -p "fuzz/artifacts/${{ matrix.target }}"
+          cargo +nightly fuzz run "${{ matrix.target }}" \
+            "fuzz/corpus/${{ matrix.target }}" \
+            -- \
+            -max_total_time="${FUZZ_SECONDS}" \
+            -timeout=15 \
+            -artifact_prefix="fuzz/artifacts/${{ matrix.target }}/" \
+            -print_final_stats=1
+
+      - name: Generate fuzz coverage report
+        if: always()
+        run: bash scripts/fuzz/coverage_report.sh "${{ matrix.target }}"
+
+      - name: Upload fuzz artifacts and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            stellar-lend/fuzz/artifacts/${{ matrix.target }}
+            stellar-lend/fuzz/coverage
+          if-no-files-found: ignore
