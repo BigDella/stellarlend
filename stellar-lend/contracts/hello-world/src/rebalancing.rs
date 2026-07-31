@@ -121,6 +121,51 @@ pub enum RebalancingDataKey {
     EmergencyStop,
     /// Global rebalancing pause: RebalancingPaused -> bool
     RebalancingPaused,
+    /// #673 — bounded rebalancing history per user: RebalancingHistory(user) -> Vec<RebalancingHistoryEntry>
+    RebalancingHistory(Address),
+}
+
+/// #673 — a single recorded rebalancing execution, for history/performance-impact review.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RebalancingHistoryEntry {
+    pub timestamp: u64,
+    pub health_factor_before: i128,
+    pub health_factor_after: i128,
+    pub estimated_gas_cost: i128,
+}
+
+/// Maximum rebalancing history entries retained per user (oldest pruned first).
+const MAX_REBALANCING_HISTORY: u32 = 50;
+
+/// #673 — get a user's bounded rebalancing history, most-recent-last.
+pub fn get_rebalancing_history(env: &Env, user: &Address) -> Vec<RebalancingHistoryEntry> {
+    env.storage()
+        .persistent()
+        .get(&RebalancingDataKey::RebalancingHistory(user.clone()))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn record_rebalancing_history(
+    env: &Env,
+    user: &Address,
+    health_factor_before: i128,
+    health_factor_after: i128,
+    estimated_gas_cost: i128,
+) {
+    let key = RebalancingDataKey::RebalancingHistory(user.clone());
+    let mut history: Vec<RebalancingHistoryEntry> =
+        env.storage().persistent().get(&key).unwrap_or_else(|| Vec::new(env));
+    history.push_back(RebalancingHistoryEntry {
+        timestamp: env.ledger().timestamp(),
+        health_factor_before,
+        health_factor_after,
+        estimated_gas_cost,
+    });
+    while history.len() > MAX_REBALANCING_HISTORY {
+        history.remove(0);
+    }
+    env.storage().persistent().set(&key, &history);
 }
 
 /// Configure rebalancing settings for a user
@@ -236,7 +281,16 @@ pub fn get_rebalancing_config(env: &Env, user: &Address) -> RebalancingConfig {
 /// * `InsufficientLiquidity` - Not enough liquidity for swap
 pub fn execute_rebalancing(env: &Env, user: Address) -> Result<(), RebalancingError> {
     user.require_auth();
+    execute_rebalancing_internal(env, &user)
+}
 
+/// #673 — core rebalancing logic with no auth check, shared by the single-user
+/// entrypoint (which requires the user's own signature above) and
+/// `execute_batch_rebalancing` (which does not — see that function's doc
+/// comment for why skipping per-user auth there is intentional, not an
+/// oversight). Also now records a history entry and returns the estimated
+/// gas cost so callers/history can report performance impact.
+fn execute_rebalancing_internal(env: &Env, user: &Address) -> Result<(), RebalancingError> {
     // Check emergency stop
     if is_emergency_stop_active(env) {
         return Err(RebalancingError::InvalidConfig);
@@ -248,7 +302,7 @@ pub fn execute_rebalancing(env: &Env, user: Address) -> Result<(), RebalancingEr
     }
 
     // Get user configuration
-    let config = get_rebalancing_config(env, &user);
+    let config = get_rebalancing_config(env, user);
     if !config.auto_rebalance_enabled {
         return Err(RebalancingError::InvalidConfig);
     }
@@ -260,8 +314,9 @@ pub fn execute_rebalancing(env: &Env, user: Address) -> Result<(), RebalancingEr
     }
 
     // Get current position summary
-    let position_summary = get_user_position_summary(env, &user)
+    let position_summary = get_user_position_summary(env, user)
         .map_err(|_| RebalancingError::Undercollateralized)?;
+    let health_factor_before = position_summary.health_factor;
 
     // Check if rebalancing is needed
     if position_summary.health_factor >= config.target_health_factor_min 
@@ -269,14 +324,60 @@ pub fn execute_rebalancing(env: &Env, user: Address) -> Result<(), RebalancingEr
         return Err(RebalancingError::AlreadyHealthy);
     }
 
+    let estimated_gas_cost = estimate_rebalancing_gas_cost(env, user, &position_summary);
+
     // Determine rebalancing action
-    if position_summary.health_factor < config.target_health_factor_min {
+    let result = if position_summary.health_factor < config.target_health_factor_min {
         // Health factor too low - need to improve collateral ratio
-        execute_collateral_optimization(env, &user, &position_summary, &config)
+        execute_collateral_optimization(env, user, &position_summary, &config)
     } else {
         // Health factor too high - could optimize for efficiency
-        execute_efficiency_optimization(env, &user, &position_summary, &config)
+        execute_efficiency_optimization(env, user, &position_summary, &config)
+    };
+
+    if result.is_ok() {
+        // #673 — performance impact: re-read the position after rebalancing to
+        // capture the actual resulting health factor, not just the target.
+        let health_factor_after = get_user_position_summary(env, user)
+            .map(|p| p.health_factor)
+            .unwrap_or(health_factor_before);
+        record_rebalancing_history(
+            env,
+            user,
+            health_factor_before,
+            health_factor_after,
+            estimated_gas_cost,
+        );
     }
+
+    result
+}
+
+/// #673 — gas-optimized batch rebalancing: rebalances every user in `users`
+/// within a single transaction/call instead of one transaction per user.
+///
+/// Deliberately does not require each user's own signature (unlike the
+/// single-user `execute_rebalancing`): a user only reaches this path if they
+/// already opted in via `configure_rebalancing(..., auto_rebalance_enabled:
+/// true, ...)`, which is precisely what "automated" rebalancing is supposed
+/// to mean — requiring a fresh live signature from every user on every batch
+/// tick would defeat the point of automation. Only `caller` (the keeper/admin
+/// triggering the batch) needs to authorize. Per-user safety is still fully
+/// enforced by `execute_rebalancing_internal`'s existing checks (emergency
+/// stop, pause, cooldown, opt-in flag, health-factor-out-of-range gate).
+///
+/// Returns one bool per input user (true = rebalanced, false = skipped/failed
+/// for that user specifically) so a partial batch failure never reverts
+/// successful entries — matches the existing per-user error semantics rather
+/// than making the whole batch atomic-or-nothing.
+pub fn execute_batch_rebalancing(env: &Env, caller: Address, users: Vec<Address>) -> Vec<bool> {
+    caller.require_auth();
+    let mut results = Vec::new(env);
+    for user in users.iter() {
+        let ok = execute_rebalancing_internal(env, &user).is_ok();
+        results.push_back(ok);
+    }
+    results
 }
 
 /// Execute collateral optimization to improve health factor

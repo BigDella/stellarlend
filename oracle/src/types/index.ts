@@ -127,6 +127,7 @@ export interface OracleServiceConfig {
     failureThreshold: number;
     backoffMs: number;
   };
+  metricsPort?: number;
 }
 
 /**

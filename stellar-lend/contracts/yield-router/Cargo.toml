@@ -1,0 +1,11 @@
+[package]
+name = "yield-router"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+soroban-sdk = { workspace = true }
+pool-interfaces = { path = "../pool-interfaces" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

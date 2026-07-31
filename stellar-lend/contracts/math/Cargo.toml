@@ -1,0 +1,18 @@
+[package]
+name = "stellarlend-math"
+version = "0.1.0"
+edition = "2021"
+description = "Consolidated verified arithmetic library for StellarLend — WAD/RAY fixed-point, mul_div, compound interest, exponential approximation"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = { version = "1", default-features = false, features = ["alloc"] }
+
+[features]
+testutils = []

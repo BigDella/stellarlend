@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# StellarLend commit-msg hook
+# Validates commit message against Conventional Commits spec.
+# Bypass with: git commit --no-verify
+
+. "$(dirname -- "$0")/_/husky.sh"
+
+npx --no -- commitlint --edit "$1"

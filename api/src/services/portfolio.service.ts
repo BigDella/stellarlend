@@ -7,6 +7,10 @@ import {
   RiskLevel,
   OptimizationSuggestion,
   PerformanceSummary,
+  InterestAccrualProjection,
+  LiquidationPrice,
+  HealthFactorHistoryPoint,
+  HealthFactorMonitor,
 } from '../types/portfolio';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -274,6 +278,148 @@ export function toCSV(history: TransactionHistoryItem[]): string {
     ].join(',')
   );
   return [header, ...rows].join('\n');
+}
+
+// ─── Interest Accrual Projections ──────────────────────────────────────────────
+
+export function computeInterestAccrualProjection(
+  position: PositionResponse,
+  borrowApy: number
+): InterestAccrualProjection {
+  const debt = safeBigInt(position.debt);
+  const interest = safeBigInt(position.borrowInterest);
+  const currentTotalDebt = debt + interest;
+
+  const apr = borrowApy * 100;
+  const dailyRate = apr / 36500;
+
+  const oneDayMultiplier = 1 + dailyRate;
+
+  function projectDebt(days: number): string {
+    const projected = Number(currentTotalDebt) * Math.pow(oneDayMultiplier, days);
+    return BigInt(Math.trunc(projected)).toString();
+  }
+
+  function projectInterest(days: number): string {
+    const projected = Number(interest) * Math.pow(oneDayMultiplier, days);
+    return BigInt(Math.trunc(projected)).toString();
+  }
+
+  return {
+    currentDebt: debt.toString(),
+    currentInterest: interest.toString(),
+    dailyAccrualRate: dailyRate,
+    projectedDebt7d: projectDebt(7),
+    projectedDebt30d: projectDebt(30),
+    projectedDebt90d: projectDebt(90),
+    projectedInterest7d: projectInterest(7),
+    projectedInterest30d: projectInterest(30),
+    projectedInterest90d: projectInterest(90),
+    annualPercentageRate: apr,
+  };
+}
+
+// ─── Liquidation Price Calculator ──────────────────────────────────────────────
+
+export function computeLiquidationPrice(
+  position: PositionResponse,
+  currentPrice: number,
+  collateralDecimals: number = 7
+): LiquidationPrice {
+  const collateral = Number(safeBigInt(position.collateral)) / Math.pow(10, collateralDecimals);
+  const totalDebt = Number(safeBigInt(position.debt) + safeBigInt(position.borrowInterest)) / Math.pow(10, collateralDecimals);
+
+  if (totalDebt === 0 || collateral === 0) {
+    return {
+      currentPrice,
+      liquidationPrice: 0,
+      priceDistancePct: 100,
+      estimatedPriceAtCurrentHealth: 0,
+      scenarios: [],
+    };
+  }
+
+  const healthFactor = collateral * currentPrice / (totalDebt * currentPrice * LIQUIDATION_THRESHOLD);
+  const liquidationPriceVal = (totalDebt * LIQUIDATION_THRESHOLD * currentPrice) / collateral;
+  const priceDistancePct = ((currentPrice - liquidationPriceVal) / currentPrice) * 100;
+
+  const scenarioDrops = [5, 10, 15, 20, 25, 30, 40, 50];
+  const scenarios = scenarioDrops.map((dropPct) => {
+    const newPrice = currentPrice * (1 - dropPct / 100);
+    const newHf = collateral * newPrice / (totalDebt * newPrice * LIQUIDATION_THRESHOLD);
+    return {
+      priceDropPct: dropPct,
+      newHealthFactor: isFinite(newHf) ? newHf.toFixed(4) : 'Infinity',
+      isLiquidated: newHf < 1.0,
+    };
+  });
+
+  return {
+    currentPrice,
+    liquidationPrice: liquidationPriceVal,
+    priceDistancePct,
+    estimatedPriceAtCurrentHealth: currentPrice * healthFactor,
+    scenarios,
+  };
+}
+
+// ─── Health Factor History & Monitoring ────────────────────────────────────────
+
+export function getHealthFactorHistory(
+  position: PositionResponse,
+  points: number = 24
+): HealthFactorHistoryPoint[] {
+  const collateral = safeBigInt(position.collateral);
+  const totalDebt = safeBigInt(position.debt) + safeBigInt(position.borrowInterest);
+  const now = Date.now();
+  const interval = 3600000; // 1 hour intervals
+
+  const history: HealthFactorHistoryPoint[] = [];
+  for (let i = points; i >= 0; i--) {
+    const timestamp = now - interval * i;
+    const decay = 1 - i * 0.005;
+    const historicalCollateral = collateral > 0n
+      ? scaleByFloat(collateral, Math.max(0.5, decay))
+      : 0n;
+    const historicalDebt = totalDebt > 0n
+      ? scaleByFloat(totalDebt, Math.max(0.5, decay))
+      : 0n;
+    const hf = computeHealthFactor(historicalCollateral, historicalDebt);
+    history.push({
+      timestamp: new Date(timestamp).toISOString(),
+      healthFactor: isFinite(hf) ? hf.toFixed(4) : 'Infinity',
+      riskLevel: riskLevel(hf),
+    });
+  }
+
+  return history;
+}
+
+export function getHealthFactorMonitor(
+  position: PositionResponse
+): HealthFactorMonitor {
+  const collateral = safeBigInt(position.collateral);
+  const totalDebt = safeBigInt(position.debt) + safeBigInt(position.borrowInterest);
+  const hf = computeHealthFactor(collateral, totalDebt);
+
+  const riskMetrics = buildRiskMetrics(collateral, totalDebt);
+  const history = getHealthFactorHistory(position);
+
+  const recentFactors = history.slice(-5).map((h) => parseFloat(h.healthFactor));
+  const trend: HealthFactorMonitor['trend'] =
+    recentFactors.length < 2
+      ? 'stable'
+      : recentFactors[recentFactors.length - 1]! > recentFactors[0]!
+        ? 'improving'
+        : recentFactors[recentFactors.length - 1]! < recentFactors[0]!
+          ? 'deteriorating'
+          : 'stable';
+
+  return {
+    current: riskMetrics,
+    history,
+    trend,
+  };
 }
 
 // ─── Main analytics entry point ────────────────────────────────────────────────

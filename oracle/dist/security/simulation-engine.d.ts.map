@@ -1,0 +1,1 @@
+{"version":3,"file":"simulation-engine.d.ts","sourceRoot":"","sources":["../../src/security/simulation-engine.ts"],"names":[],"mappings":"AAAA,OAAO,EAA6B,SAAS,EAAoB,MAAM,SAAS,CAAC;AAIjF,qBAAa,cAAc;IACzB,OAAO,CAAC,SAAS,CAAwB;;IAOnC,gBAAgB,CAAC,aAAa,EAAE,GAAG,GAAG,OAAO,CAAC,SAAS,CAAC;IAoB9D,OAAO,CAAC,eAAe;CAMxB"}

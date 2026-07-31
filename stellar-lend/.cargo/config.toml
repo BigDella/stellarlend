@@ -1,0 +1,5 @@
+[build]
+incremental = true
+
+[net]
+retry = 2

@@ -17,7 +17,7 @@
  *   getStats()               — aggregate metrics
  */
 
-import type { PriceAggregator } from '../services/price-aggregator.js';
+import type { PriceAggregator } from '@/services/price-aggregator';
 import type {
   ClaimSubmissionRequest,
   InsuranceClaim,
@@ -25,30 +25,30 @@ import type {
   DisputeRecord,
   ClaimsStats,
   ClaimsServiceConfig,
-} from './types.js';
-import { ClaimStatus, RejectionReason, DisputeResolution } from './types.js';
+} from './types';
+import { ClaimStatus, RejectionReason, DisputeResolution } from './types';
 import {
   ClaimRepository,
   createClaimRepository,
-} from './claim-repository.js';
+} from './claim-repository';
 import {
   ClaimVerifier,
   createClaimVerifier,
-} from './claim-verifier.js';
+} from './claim-verifier';
 import {
   PayoutCalculator,
   createPayoutCalculator,
-} from './payout-calculator.js';
+} from './payout-calculator';
 import {
   FraudDetector,
   createFraudDetector,
-} from './fraud-detector.js';
+} from './fraud-detector';
 import {
   DisputeManager,
   createDisputeManager,
   DisputeError,
-} from './dispute-manager.js';
-import { logger } from '../utils/logger.js';
+} from './dispute-manager';
+import { logger } from '@/utils/logger';
 
 /**
  * Default service configuration.

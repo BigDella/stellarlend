@@ -2,8 +2,19 @@ import { Request, Response } from 'express';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
+import {
+  getVerificationProof,
+  getVerificationStatus,
+  revokeVerification,
+  submitVerification,
+  VerificationLevel,
+  VerificationProvider,
+} from '../services/verification.service';
 
 const execAsync = promisify(exec);
+
+const VALID_LEVELS: VerificationLevel[] = ['basic', 'enhanced', 'institutional'];
+const VALID_PROVIDERS: VerificationProvider[] = ['civic', 'fractal_id', 'mock'];
 
 /**
  * Verify contract against source code
@@ -59,4 +70,71 @@ export const verifyContract = async (req: Request, res: Response): Promise<void>
       error: 'Verification failed',
     });
   }
+};
+
+export const submitKycVerification = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { userAddress, provider = 'mock', level = 'basic', jurisdiction, proofHash } = req.body ?? {};
+
+    if (!userAddress || typeof userAddress !== 'string') {
+      res.status(400).json({ error: 'userAddress is required' });
+      return;
+    }
+    if (!VALID_PROVIDERS.includes(provider)) {
+      res.status(400).json({ error: 'provider must be civic, fractal_id, or mock' });
+      return;
+    }
+    if (!VALID_LEVELS.includes(level)) {
+      res.status(400).json({ error: 'level must be basic, enhanced, or institutional' });
+      return;
+    }
+
+    const attestation = await submitVerification({
+      userAddress,
+      provider,
+      level,
+      jurisdiction,
+      proofHash,
+    });
+
+    res.status(attestation.status === 'verified' ? 201 : 202).json(attestation);
+  } catch (error) {
+    console.error('KYC verification error:', error);
+    res.status(500).json({ error: 'KYC verification failed' });
+  }
+};
+
+export const getKycStatus = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { userAddress } = req.params;
+    const status = await getVerificationStatus(userAddress!);
+    if (!status) {
+      res.status(404).json({ error: 'Verification attestation not found' });
+      return;
+    }
+    res.json(status);
+  } catch (error) {
+    console.error('KYC status error:', error);
+    res.status(500).json({ error: 'Unable to read verification status' });
+  }
+};
+
+export const revokeKycAttestation = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { userAddress } = req.params;
+    const revoked = await revokeVerification(userAddress!);
+    if (!revoked) {
+      res.status(404).json({ error: 'Verification attestation not found' });
+      return;
+    }
+    res.json(revoked);
+  } catch (error) {
+    console.error('KYC revoke error:', error);
+    res.status(500).json({ error: 'Unable to revoke verification attestation' });
+  }
+};
+
+export const getPrivacyProof = (req: Request, res: Response): void => {
+  const { userAddress } = req.params;
+  res.json(getVerificationProof(userAddress!));
 };
