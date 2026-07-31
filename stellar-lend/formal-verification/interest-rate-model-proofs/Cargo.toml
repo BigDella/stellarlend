@@ -1,0 +1,18 @@
+[package]
+name = "interest-rate-model-proofs"
+version = "0.1.0"
+edition = "2021"
+description = "Kani proof harnesses for the StellarLend interest rate model boundary conditions"
+
+# This crate is NOT part of the main workspace.  Run verification with:
+#   cargo kani --manifest-path formal-verification/interest-rate-model-proofs/Cargo.toml
+#   cargo test --manifest-path formal-verification/interest-rate-model-proofs/Cargo.toml
+
+[dependencies]
+lending-interest = { path = "../../contracts/lending-interest" }
+stellarlend-safe-math = { path = "../../contracts/safe-math" }
+soroban-sdk = "23.4.1"
+
+# No `kani` crate dependency is declared here: `cargo kani` injects the
+# `kani` crate/cfg via its own sysroot automatically. See the sibling
+# `safe-math-proofs/Cargo.toml` for the full rationale.

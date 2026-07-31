@@ -1,0 +1,19 @@
+[package]
+name = "stellarlend-twap-oracle"
+version = "0.1.0"
+edition = "2021"
+description = "On-chain TWAP (Time-Weighted Average Price) oracle for manipulation-resistant price feeds"
+
+[lib]
+name = "stellarlend_twap_oracle"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

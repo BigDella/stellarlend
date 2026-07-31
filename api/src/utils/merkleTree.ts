@@ -30,7 +30,11 @@ export class MerkleTree {
   }
 
   get root(): string {
-    return this.tree[this.tree.length - 1][0];
+    const topLevel = this.tree[this.tree.length - 1];
+    if (!topLevel) throw new Error('Empty tree');
+    const root = topLevel[0];
+    if (!root) throw new Error('Empty root level');
+    return root;
   }
 
   get depth(): number {
@@ -49,18 +53,24 @@ export class MerkleTree {
       const levelNodes = this.tree[level];
       const siblingIndex = currentIndex % 2 === 0 ? currentIndex + 1 : currentIndex - 1;
 
-      if (siblingIndex < levelNodes.length) {
-        siblings.push({
-          hash: levelNodes[siblingIndex],
-          position: currentIndex % 2 === 0 ? 'right' : 'left',
-        });
+      if (levelNodes && siblingIndex < levelNodes.length) {
+        const siblingHash = levelNodes[siblingIndex];
+        if (siblingHash !== undefined) {
+          siblings.push({
+            hash: siblingHash,
+            position: currentIndex % 2 === 0 ? 'right' : 'left',
+          });
+        }
       }
 
       currentIndex = Math.floor(currentIndex / 2);
     }
 
+    const leaf = this.leaves[index];
+    if (!leaf) throw new Error('Leaf not found');
+
     return {
-      leaf: this.leaves[index],
+      leaf,
       index,
       siblings,
       root: this.root,
@@ -92,8 +102,8 @@ export class MerkleTree {
     while (current.length > 1) {
       const next: string[] = [];
       for (let i = 0; i < current.length; i += 2) {
-        const left = current[i];
-        const right = i + 1 < current.length ? current[i + 1] : current[i]; // duplicate last leaf
+        const left = current[i]!;
+        const right = i + 1 < current.length ? current[i + 1]! : left;
         next.push(hashPair(left, right));
       }
       levels.push(next);

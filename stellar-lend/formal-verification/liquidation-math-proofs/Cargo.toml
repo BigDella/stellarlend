@@ -1,0 +1,19 @@
+[package]
+name = "liquidation-math-proofs"
+version = "0.1.0"
+edition = "2021"
+description = "Kani proof harnesses for StellarLend liquidation math invariants (lending-risk)"
+
+# This crate is NOT part of the main workspace.  Run verification with:
+#   cargo kani --manifest-path formal-verification/liquidation-math-proofs/Cargo.toml
+#   cargo test --manifest-path formal-verification/liquidation-math-proofs/Cargo.toml
+
+[dependencies]
+lending-risk = { path = "../../contracts/lending-risk" }
+lending-types = { path = "../../contracts/lending-types" }
+stellarlend-safe-math = { path = "../../contracts/safe-math" }
+soroban-sdk = "23.4.1"
+
+# No `kani` crate dependency is declared here: `cargo kani` injects the
+# `kani` crate/cfg via its own sysroot automatically. See
+# `formal-verification/safe-math-proofs/Cargo.toml` for the full rationale.

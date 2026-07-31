@@ -313,7 +313,7 @@ describe('Lending Controller', () => {
         .query({ limit: 9999 });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toMatch(/limit/i);
+      expect(response.body.error.message).toMatch(/limit/i);
     });
 
     it('should validate cursor is non-empty', async () => {
@@ -322,7 +322,7 @@ describe('Lending Controller', () => {
         .query({ cursor: '' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toMatch(/cursor/i);
+      expect(response.body.error.message).toMatch(/cursor/i);
     });
 
     it('should reject a cursor that is not valid base64url', async () => {
@@ -331,7 +331,7 @@ describe('Lending Controller', () => {
         .query({ cursor: '!!!not-a-valid-cursor!!!' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toMatch(/cursor/i);
+      expect(response.body.error.message).toMatch(/cursor/i);
     });
 
     it('should return an opaque base64url cursor when hasMore is true', async () => {
@@ -419,7 +419,7 @@ describe('Lending Controller', () => {
       const response = await request(app).get('/api/health/live');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ status: 'ok' });
+      expect(response.body).toMatchObject({ status: 'ok' });
       expect(mockStellarService.healthCheck).not.toHaveBeenCalled();
     });
   });
@@ -429,7 +429,7 @@ describe('Lending Controller', () => {
       const response = await request(app).get('/api/health/ready');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({
+      expect(response.body).toMatchObject({
         status: 'ok',
         horizon: 'up',
         soroban: 'up',
@@ -445,7 +445,7 @@ describe('Lending Controller', () => {
       const response = await request(app).get('/api/health/ready');
 
       expect(response.status).toBe(503);
-      expect(response.body).toEqual({
+      expect(response.body).toMatchObject({
         status: 'error',
         horizon: 'down',
         soroban: 'up',
@@ -458,7 +458,7 @@ describe('Lending Controller', () => {
       const response = await request(app).get('/api/protocol/stats');
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({
+      expect(response.body).toMatchObject({
         totalDeposits: '1000000',
         totalBorrows: '500000',
         utilizationRate: '0.50',
@@ -499,7 +499,7 @@ describe('Lending Controller', () => {
         .send({ signedXdr: 'signed_xdr_string' });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toMatch(/Idempotency-Key/i);
+      expect(response.body.error.message).toMatch(/Idempotency-Key/i);
     });
   });
 

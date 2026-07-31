@@ -1,0 +1,24 @@
+{
+  "name": "raw_transactions",
+  "version": "1.0.0",
+  "description": "Raw Stellar/Soroban transaction records for the StellarLend data lake",
+  "type": "struct",
+  "fields": [
+    { "name": "ledger", "type": "int64", "required": true },
+    { "name": "tx_hash", "type": "string", "required": true },
+    { "name": "contract_id", "type": "string", "required": true },
+    { "name": "event_type", "type": "string", "required": true },
+    { "name": "event_index", "type": "int32", "required": true },
+    { "name": "block_timestamp", "type": "timestamp-millis", "required": true },
+    { "name": "user_address", "type": "string", "required": false },
+    { "name": "asset_address", "type": "string", "required": false },
+    { "name": "amount", "type": "string", "required": false, "doc": "i128 as decimal string" },
+    { "name": "payload_json", "type": "string", "required": true },
+    { "name": "schema_version", "type": "int32", "required": true }
+  ],
+  "partitions": ["date", "event_type"],
+  "evolution": {
+    "strategy": "additive",
+    "notes": "New fields may be appended; readers must tolerate missing optional columns after contract upgrades."
+  }
+}

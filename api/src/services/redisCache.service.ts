@@ -2,7 +2,7 @@ import Redis from 'ioredis';
 import { config } from '../config';
 import logger from '../utils/logger';
 
-export type HotCacheKeyKind = 'price' | 'position' | 'pool' | 'protocol';
+export type HotCacheKeyKind = 'price' | 'position' | 'pool' | 'protocol' | 'gas' | 'mev' | 'nonce';
 
 interface CacheMetrics {
   hits: number;
@@ -32,12 +32,20 @@ class RedisCacheService {
     return `stellarlend:${kind}:${id}`;
   }
 
-  async warmup(): Promise<void> {
+  async warmup(prefetch?: () => Promise<void>): Promise<void> {
     if (!this.redis) return;
     try {
       await this.redis.connect();
       await this.redis.ping();
       logger.info('Redis cache warmed');
+      if (prefetch) {
+        try {
+          await prefetch();
+          logger.info('Redis cache pre-fetched');
+        } catch (prefetchError) {
+          logger.warn('Redis cache prefetch failed', { error: prefetchError });
+        }
+      }
     } catch (error) {
       this.metrics.errors += 1;
       logger.warn('Redis warmup failed, memory fallback remains active', { error });
@@ -86,6 +94,19 @@ class RedisCacheService {
     } catch (error) {
       this.metrics.errors += 1;
       logger.warn('Cache set failed', { key, error });
+    }
+  }
+
+  async del(key: string): Promise<void> {
+    try {
+      if (this.redis?.status === 'ready') {
+        await this.redis.del(key);
+        return;
+      }
+      this.memoryFallback.delete(key);
+    } catch (error) {
+      this.metrics.errors += 1;
+      logger.warn('Cache del failed', { key, error });
     }
   }
 

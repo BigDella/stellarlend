@@ -147,6 +147,6 @@ describe('Subscription import/export routes', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(response.body.error).toBe('Invalid JSON import payload');
+    expect(response.body.error.message).toBe('Invalid JSON import payload');
   });
 });

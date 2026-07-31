@@ -1,0 +1,107 @@
+name: Gas Optimization Report
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  gas-report:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build contracts
+        run: |
+          cd stellar-lend
+          ./scripts/build.sh
+
+      - name: Get base branch baseline
+        run: |
+          git fetch origin main:main
+          npm run gas:baseline main > /tmp/baseline.json || echo '{}' > /tmp/baseline.json
+
+      - name: Generate current gas report
+        run: npm run gas:report > /tmp/current.json
+
+      - name: Compare gas costs
+        run: npm run gas:compare /tmp/baseline.json /tmp/current.json > /tmp/comparison.md
+
+      - name: Check for regressions
+        id: check-regression
+        run: |
+          npm run gas:check /tmp/comparison.json > /tmp/check_result.json
+          FAILED=$(jq '.regressions > 0' /tmp/check_result.json)
+          echo "FAILED=$FAILED" >> $GITHUB_OUTPUT
+
+      - name: Post report to PR
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const comparison = fs.readFileSync('/tmp/comparison.md', 'utf8');
+            const checkResult = JSON.parse(fs.readFileSync('/tmp/check_result.json', 'utf8'));
+
+            let status = '✅ No gas regressions detected';
+            if (checkResult.regressions > 0) {
+              status = `⚠️ ${checkResult.regressions} gas regression(s) detected`;
+            }
+
+            const body = `## Gas Optimization Report
+
+${status}
+
+${comparison}
+
+### Summary
+- **Functions analyzed**: ${checkResult.total}
+- **Improvements**: ${checkResult.improvements}
+- **Regressions**: ${checkResult.regressions}
+- **Average change**: ${checkResult.average_change > 0 ? '+' : ''}${checkResult.average_change.toFixed(2)}%
+`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fail if regressions exceed threshold
+        if: steps.check-regression.outputs.FAILED == 'true'
+        run: exit 1

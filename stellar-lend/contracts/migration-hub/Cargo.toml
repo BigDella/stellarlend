@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 soroban-sdk = { workspace = true }
+stellarlend-shared-deadline = { path = "../shared-deadline" }
 soroban-token-sdk = { workspace = true }
 stellarlend-common = { path = "../common" }
 

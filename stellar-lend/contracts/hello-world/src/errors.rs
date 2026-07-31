@@ -18,6 +18,7 @@ use crate::risk_management::RiskManagementError;
 use crate::risk_params::RiskParamsError;
 use crate::treasury::TreasuryError;
 use crate::withdraw::WithdrawError;
+use crate::emergency_withdrawal::EmergencyWithdrawalError;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -70,6 +71,14 @@ pub enum GovernanceError {
     InvalidTimelockStatus = 144,
     InvalidTimelockConfig = 145,
     InvalidTimelockDelay = 146,
+    /// #675 — recovery approved but the mandatory delay/cancellation window hasn't elapsed
+    RecoveryNotReady = 147,
+    /// #674 — per-action-type timelock delay configuration is invalid
+    InvalidActionTypeDelay = 148,
+    /// #674 — guardian emergency override already approved by this guardian
+    EmergencyOverrideAlreadyApproved = 149,
+    /// #674 — not enough guardian approvals yet for an emergency override
+    InsufficientEmergencyApprovals = 150,
 }
 
 /// Unified public contract error type for the lending interface.
@@ -277,6 +286,10 @@ impl_from_error!(MevProtectionError, {
     MevProtectionError::FeeCapExceeded => LendingError::FeeCapExceeded,
     MevProtectionError::InvalidAmount => LendingError::InvalidAmount,
     MevProtectionError::InvalidOperation => LendingError::InvalidState,
+    MevProtectionError::DeadlineExpired => LendingError::CommitExpired,
+    MevProtectionError::SlippageExceeded => LendingError::LimitExceeded,
+    MevProtectionError::AuctionWindowOpen => LendingError::InvalidState,
+    MevProtectionError::NoBidsInAuction => LendingError::DataNotFound,
 });
 
 impl_from_error!(RepayError, {
@@ -361,6 +374,10 @@ impl_from_error!(DebtTokenError, {
     DebtTokenError::ZeroAddress => LendingError::InvalidParameter,
     DebtTokenError::AlreadyTokenized => LendingError::AlreadyExists,
     DebtTokenError::PositionNotFound => LendingError::DataNotFound,
+    DebtTokenError::NotListed => LendingError::DataNotFound,
+    DebtTokenError::AlreadyListed => LendingError::AlreadyExists,
+    DebtTokenError::NotSeller => LendingError::Unauthorized,
+    DebtTokenError::InvalidPrice => LendingError::InvalidParameter,
 });
 
 impl From<CrossAssetError> for LendingError {
@@ -379,3 +396,14 @@ impl From<CrossAssetError> for LendingError {
         }
     }
 }
+
+impl_from_error!(EmergencyWithdrawalError, {
+    EmergencyWithdrawalError::NotActive => LendingError::InvalidState,
+    EmergencyWithdrawalError::AlreadyActive => LendingError::AlreadyExists,
+    EmergencyWithdrawalError::WindowNotOpen => LendingError::InvalidState,
+    EmergencyWithdrawalError::NotAuthorized => LendingError::Unauthorized,
+    EmergencyWithdrawalError::InsufficientBalance => LendingError::InsufficientBalance,
+    EmergencyWithdrawalError::ExceedsWithdrawalCap => LendingError::LimitExceeded,
+    EmergencyWithdrawalError::InvalidParameter => LendingError::InvalidParameter,
+    EmergencyWithdrawalError::AlreadyWithdrawn => LendingError::AlreadyExists,
+});

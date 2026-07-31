@@ -1,144 +1,100 @@
 import swaggerJsdoc from 'swagger-jsdoc';
 
-const options: swaggerJsdoc.Options = {
-  definition: {
-    openapi: '3.0.3',
-    info: {
-      title: 'StellarLend API',
-      version: '1.0.0',
-      description: 'REST API for StellarLend core lending operations on Stellar/Soroban',
-      license: {
-        name: 'MIT',
-      },
-    },
-    servers: [
-      {
-        url: '/api',
-        description: 'API base path',
-      },
-    ],
-    components: {
-      schemas: {
-        PrepareResponse: {
-          type: 'object',
-          properties: {
-            unsignedXdr: { type: 'string', description: 'Unsigned transaction XDR' },
-            operation: {
-              type: 'string',
-              enum: ['deposit', 'borrow', 'repay', 'withdraw'],
-            },
-            expiresAt: {
-              type: 'string',
-              format: 'date-time',
-              description: 'XDR expiration timestamp',
-            },
-          },
-          required: ['unsignedXdr', 'operation', 'expiresAt'],
-        },
-        SubmitRequest: {
-          type: 'object',
-          properties: {
-            signedXdr: { type: 'string', description: 'Signed transaction XDR' },
-          },
-          required: ['signedXdr'],
-        },
-        TransactionResponse: {
-          type: 'object',
-          properties: {
-            success: { type: 'boolean' },
-            transactionHash: { type: 'string' },
-            status: {
-              type: 'string',
-              enum: ['pending', 'success', 'failed', 'cancelled'],
-            },
-            message: { type: 'string' },
-            error: { type: 'string' },
-            ledger: { type: 'integer' },
-            details: { description: 'Optional raw provider payload for debugging' },
-          },
-          required: ['success', 'status'],
-        },
-        HealthCheckResponse: {
-          type: 'object',
-          properties: {
-            status: { type: 'string', enum: ['healthy', 'unhealthy'] },
-            timestamp: { type: 'string', format: 'date-time' },
-            services: {
-              type: 'object',
-              properties: {
-                horizon: { type: 'boolean' },
-                sorobanRpc: { type: 'boolean' },
-              },
-              required: ['horizon', 'sorobanRpc'],
-            },
-          },
-          required: ['status', 'timestamp', 'services'],
-        },
-        ProtocolStatsResponse: {
-          type: 'object',
-          properties: {
-            totalDeposits: { type: 'string' },
-            totalBorrows: { type: 'string' },
-            utilizationRate: {
-              type: 'string',
-              description: 'Borrowed-to-deposited ratio expressed as a decimal string',
-              example: '0.50',
-            },
-            numberOfUsers: { type: 'integer' },
-            tvl: { type: 'string' },
-          },
-          required: ['totalDeposits', 'totalBorrows', 'utilizationRate', 'numberOfUsers', 'tvl'],
-        },
-        ErrorResponse: {
-          type: 'object',
-          properties: {
-            success: { type: 'boolean', example: false },
-            error: { type: 'string' },
-          },
-          required: ['success', 'error'],
-        },
-        PaginationMeta: {
-          type: 'object',
-          properties: {
-            cursor: { type: ['string', 'null'], nullable: true },
-            hasMore: { type: 'boolean' },
-            limit: { type: 'integer' },
-          },
-          required: ['cursor', 'hasMore', 'limit'],
-        },
-        PaginatedResponseTransactionHistory: {
-          type: 'object',
-          properties: {
-            data: {
-              type: 'array',
-              items: {
-                $ref: '#/components/schemas/TransactionHistoryItem',
-              },
-            },
-            pagination: {
-              $ref: '#/components/schemas/PaginationMeta',
-            },
-          },
-          required: ['data', 'pagination'],
-        },
-        TransactionHistoryItem: {
-          type: 'object',
-          properties: {
-            transactionHash: { type: 'string' },
-            type: { type: 'string', enum: ['deposit', 'borrow', 'repay', 'withdraw'] },
-            amount: { type: 'string' },
-            assetAddress: { type: 'string' },
-            timestamp: { type: 'string', format: 'date-time' },
-            status: { type: 'string', enum: ['success', 'failed', 'pending'] },
-            ledger: { type: 'integer' },
-            memo: { type: 'string' },
-          },
-          required: ['transactionHash', 'type', 'amount', 'timestamp', 'status'],
-        },
-      },
-    },
+/**
+ * Per-version OpenAPI specification configuration.
+ * Each version can have its own info block, servers, and route paths.
+ */
+
+export interface VersionedOpenApiConfig {
+  version: string;
+  title: string;
+  description: string;
+  routeGlob: string;
+  /** Additional glob(s) for route files containing @openapi annotations */
+  legacyRouteGlob?: string;
+  deprecated?: boolean;
+  sunset?: string;
+}
+
+const versionConfigs: Record<string, VersionedOpenApiConfig> = {
+  v1: {
+    version: '1.0.0',
+    title: 'StellarLend API v1',
+    description: 'REST API v1 for StellarLend core lending operations on Stellar/Soroban',
+    routeGlob: './src/routes/v1/**/*.ts',
+    // Also scan original route files for @openapi JSDoc annotations
+    legacyRouteGlob: './src/routes/*.ts',
   },
-  apis: ['./src/routes/*.ts'],
 };
 
-export const swaggerSpec = swaggerJsdoc(options);
+/**
+ * Build an OpenAPI spec for a specific API version.
+ */
+export function buildVersionedSpec(apiVersion: string): object {
+  const vConfig = versionConfigs[apiVersion];
+  if (!vConfig) {
+    throw new Error(`Unknown API version: ${apiVersion}. Available: ${Object.keys(versionConfigs).join(', ')}`);
+  }
+
+  const options: swaggerJsdoc.Options = {
+    definition: {
+      openapi: '3.0.3',
+      info: {
+        title: vConfig.title,
+        version: vConfig.version,
+        description: vConfig.description,
+        license: { name: 'MIT' },
+      },
+      servers: [
+        {
+          url: `/api/${apiVersion}`,
+          description: `${apiVersion.toUpperCase()} base path`,
+        },
+      ],
+    },
+    apis: [vConfig.routeGlob, vConfig.legacyRouteGlob].filter((g): g is string => Boolean(g)),
+  };
+
+  return swaggerJsdoc(options);
+}
+
+/**
+ * Returns the current (latest stable) API version.
+ */
+export function getCurrentVersion(): string {
+  return 'v1';
+}
+
+/**
+ * Build the current/latest OpenAPI spec (legacy compatibility).
+ */
+export function buildCurrentSpec(): object {
+  return buildVersionedSpec(getCurrentVersion());
+}
+
+// Legacy swagger spec for backward compatibility
+export const swaggerSpec = buildCurrentSpec();
+
+// Version-specific specs
+export const v1Spec = buildVersionedSpec('v1');
+
+/**
+ * List all available API versions with deprecation status.
+ */
+export function listVersions(): Array<{ version: string; deprecated: boolean; sunset?: string }> {
+  return Object.entries(versionConfigs).map(([version, config]) => ({
+    version,
+    deprecated: config.deprecated ?? false,
+    sunset: config.sunset,
+  }));
+}
+
+/**
+ * Request handler to serve version list.
+ */
+export function versionListHandler(_req: any, res: any): void {
+  res.json({
+    versions: listVersions(),
+    current: getCurrentVersion(),
+  });
+}

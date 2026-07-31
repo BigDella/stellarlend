@@ -161,3 +161,55 @@ impl CheapReceiver {
         );
     }
 }
+
+#[contract]
+pub struct SequenceJumpReceiver;
+
+#[contractimpl]
+impl SequenceJumpReceiver {
+    pub fn on_flash_loan(env: Env, _user: Address, asset: Address, amount: i128, fee: i128) {
+        let total = amount + fee;
+        let token = token::TokenClient::new(&env, &asset);
+        let target_key = Symbol::new(&env, "CORE_CONTRACT");
+        let core_contract = env
+            .storage()
+            .temporary()
+            .get::<Symbol, Address>(&target_key)
+            .unwrap();
+        token.approve(
+            &env.current_contract_address(),
+            &core_contract,
+            &total,
+            &9999,
+        );
+
+        // Simulate a late callback that crosses into a later ledger sequence.
+        env.ledger().with_mut(|li| li.sequence_number += 1);
+    }
+}
+
+#[test]
+fn test_flash_loan_sequence_expiry_rejects_late_callback() {
+    let (env, contract_id, _admin, user, token_address) = setup_with_balance(10_000_000);
+
+    let receiver_id = env.register(SequenceJumpReceiver, ());
+    let target_key = Symbol::new(&env, "CORE_CONTRACT");
+    env.as_contract(&receiver_id, || {
+        env.storage().temporary().set(&target_key, &contract_id);
+    });
+
+    let token_asset_client = token::StellarAssetClient::new(&env, &token_address);
+    token_asset_client.mint(&receiver_id, &900);
+
+    let result = env.as_contract(&contract_id, || {
+        execute_flash_loan(
+            &env,
+            user.clone(),
+            token_address.clone(),
+            1_000_000,
+            receiver_id,
+        )
+    });
+
+    assert!(result.is_err());
+}

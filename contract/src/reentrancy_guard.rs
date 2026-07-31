@@ -35,8 +35,13 @@ pub enum GuardKey {
 /// Get current guard state from storage
 pub fn get_guard_state(env: &Env, key: GuardKey) -> GuardState {
     let storage_key = Symbol::new(env, &format!("guard_{:?}", key));
-    
-    match env.storage().instance().get::<Symbol, u32>(&storage_key) {
+    // Use temporary storage for flash-loan guards (short-lived within a transaction).
+    let stored = match key {
+        GuardKey::FlashLoanGuard => env.storage().temporary().get::<Symbol, u32>(&storage_key),
+        _ => env.storage().instance().get::<Symbol, u32>(&storage_key),
+    };
+
+    match stored {
         Some(state) => {
             if state == 1 {
                 GuardState::Entered
@@ -55,8 +60,11 @@ fn set_guard_state(env: &Env, key: GuardKey, state: GuardState) {
         GuardState::NotEntered => 0u32,
         GuardState::Entered => 1u32,
     };
-    
-    env.storage().instance().set(&storage_key, &state_value);
+    // Flash loan guard should live only for the transaction; use temporary storage.
+    match key {
+        GuardKey::FlashLoanGuard => env.storage().temporary().set(&storage_key, &state_value),
+        _ => env.storage().instance().set(&storage_key, &state_value),
+    };
 }
 
 /// RAII pattern: Guard that automatically exits when dropped
