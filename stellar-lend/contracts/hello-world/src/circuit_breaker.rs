@@ -9,23 +9,42 @@ pub const DEFAULT_COOLDOWN_PERIOD: u64 = 3600;
 /// Maximum cooldown period (24 hours)
 pub const MAX_COOLDOWN_PERIOD: u64 = 86400;
 
+/// Price deviation threshold for automatic trigger (20%)
+pub const PRICE_DEVIATION_THRESHOLD_BPS: u64 = 2000;
+
+/// Abnormal utilization threshold (95%)
+pub const ABNORMAL_UTILIZATION_THRESHOLD_BPS: u64 = 9500;
+
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub enum CircuitBreakerTier {
+    Tier1 = 1,
+    Tier2 = 2,
+    Tier3 = 3,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[contracttype]
 pub enum CircuitBreakerStatus {
-    Active,      // Normal operations
-    Paused,      // Liquidations paused
-    Emergency,   // Emergency mode with whitelist only
+    Active,
+    Tier1Paused,
+    Tier2Paused,
+    Tier3Halted,
 }
 
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct CircuitBreakerState {
     pub status: CircuitBreakerStatus,
+    pub tier: CircuitBreakerTier,
     pub activated_at: u64,
     pub activated_by: Address,
     pub cooldown_period: u64,
     pub auto_deactivate_at: Option<u64>,
     pub reason: CircuitBreakerReason,
+    pub affected_pool: Option<Address>,
+    pub guardian_multisig: Option<Address>,
+    pub governance_vote_required: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +55,10 @@ pub enum CircuitBreakerReason {
     ExcessiveLiquidations,
     ManualActivation,
     SystemMaintenance,
+    PriceDeviation,
+    AbnormalUtilization,
+    GuardianTrigger,
+    GovernanceTrigger,
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +67,11 @@ pub struct CircuitBreakerConfig {
     pub cooldown_period: u64,
     pub auto_deactivate_enabled: bool,
     pub whitelist_enabled: bool,
+    pub price_deviation_threshold_bps: u64,
+    pub abnormal_utilization_threshold_bps: u64,
+    pub guardian_multisig: Option<Address>,
+    pub tier1_auto_trigger_enabled: bool,
+    pub tier2_auto_trigger_enabled: bool,
 }
 
 impl Default for CircuitBreakerConfig {
@@ -52,8 +80,23 @@ impl Default for CircuitBreakerConfig {
             cooldown_period: DEFAULT_COOLDOWN_PERIOD,
             auto_deactivate_enabled: true,
             whitelist_enabled: true,
+            price_deviation_threshold_bps: PRICE_DEVIATION_THRESHOLD_BPS,
+            abnormal_utilization_threshold_bps: ABNORMAL_UTILIZATION_THRESHOLD_BPS,
+            guardian_multisig: None,
+            tier1_auto_trigger_enabled: true,
+            tier2_auto_trigger_enabled: true,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct TriggerCondition {
+    pub pool_address: Option<Address>,
+    pub price_deviation_bps: Option<u64>,
+    pub utilization_bps: Option<u64>,
+    pub consecutive_failures: Option<u32>,
+    pub timestamp: u64,
 }
 
 /// Initialize circuit breaker
@@ -68,20 +111,22 @@ pub fn initialize_circuit_breaker(
     let key = storage::DataKey::CircuitBreakerConfig;
     env.storage().instance().set(&key, &config);
 
-    // Initialize as active
     let state = CircuitBreakerState {
         status: CircuitBreakerStatus::Active,
+        tier: CircuitBreakerTier::Tier1,
         activated_at: env.ledger().timestamp(),
         activated_by: env.current_contract_address(),
         cooldown_period: config.cooldown_period,
         auto_deactivate_at: None,
         reason: CircuitBreakerReason::SystemMaintenance,
+        affected_pool: None,
+        guardian_multisig: config.guardian_multisig.clone(),
+        governance_vote_required: false,
     };
 
     let state_key = storage::DataKey::CircuitBreakerState;
     env.storage().persistent().set(&state_key, &state);
 
-    // Initialize empty whitelist
     let whitelist_key = storage::DataKey::CircuitBreakerWhitelist;
     let whitelist: Vec<Address> = Vec::new(env);
     env.storage().persistent().set(&whitelist_key, &whitelist);
@@ -349,6 +394,271 @@ pub fn update_circuit_breaker_config(
     env.storage().instance().set(&key, &config);
 
     Ok(())
+}
+
+/// Activate Tier 1 pause (single pool)
+pub fn activate_tier1_pause(
+    env: &Env,
+    caller: Address,
+    pool_address: Address,
+    reason: CircuitBreakerReason,
+) -> Result<(), LendingError> {
+    caller.require_auth();
+
+    let admin = crate::admin::get_admin(env).ok_or(LendingError::Unauthorized)?;
+    let config = get_circuit_breaker_config(env);
+    let is_guardian = config.guardian_multisig.as_ref() == Some(&caller);
+
+    if caller != admin && !is_guardian {
+        return Err(LendingError::Unauthorized);
+    }
+
+    let state_key = storage::DataKey::CircuitBreakerState;
+    let current_state: CircuitBreakerState = env
+        .storage()
+        .persistent()
+        .get(&state_key)
+        .ok_or(LendingError::NotFound)?;
+
+    if current_state.status == CircuitBreakerStatus::Tier3Halted {
+        return Err(LendingError::InvalidState);
+    }
+
+    let now = env.ledger().timestamp();
+    let auto_deactivate_at = if config.auto_deactivate_enabled {
+        Some(now + config.cooldown_period)
+    } else {
+        None
+    };
+
+    let state = CircuitBreakerState {
+        status: CircuitBreakerStatus::Tier1Paused,
+        tier: CircuitBreakerTier::Tier1,
+        activated_at: now,
+        activated_by: caller.clone(),
+        cooldown_period: config.cooldown_period,
+        auto_deactivate_at,
+        reason: reason.clone(),
+        affected_pool: Some(pool_address.clone()),
+        guardian_multisig: config.guardian_multisig,
+        governance_vote_required: false,
+    };
+
+    env.storage().persistent().set(&state_key, &state);
+
+    crate::events::CircuitBreakerActivatedEvent {
+        activated_by: caller,
+        emergency_mode: false,
+        timestamp: now,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Activate Tier 2 pause (all lending)
+pub fn activate_tier2_pause(
+    env: &Env,
+    caller: Address,
+    reason: CircuitBreakerReason,
+) -> Result<(), LendingError> {
+    caller.require_auth();
+
+    let admin = crate::admin::get_admin(env).ok_or(LendingError::Unauthorized)?;
+    let config = get_circuit_breaker_config(env);
+    let is_guardian = config.guardian_multisig.as_ref() == Some(&caller);
+
+    if caller != admin && !is_guardian {
+        return Err(LendingError::Unauthorized);
+    }
+
+    let state_key = storage::DataKey::CircuitBreakerState;
+    let current_state: CircuitBreakerState = env
+        .storage()
+        .persistent()
+        .get(&state_key)
+        .ok_or(LendingError::NotFound)?;
+
+    if current_state.status == CircuitBreakerStatus::Tier3Halted {
+        return Err(LendingError::InvalidState);
+    }
+
+    let now = env.ledger().timestamp();
+    let auto_deactivate_at = if config.auto_deactivate_enabled {
+        Some(now + config.cooldown_period)
+    } else {
+        None
+    };
+
+    let state = CircuitBreakerState {
+        status: CircuitBreakerStatus::Tier2Paused,
+        tier: CircuitBreakerTier::Tier2,
+        activated_at: now,
+        activated_by: caller.clone(),
+        cooldown_period: config.cooldown_period,
+        auto_deactivate_at,
+        reason: reason.clone(),
+        affected_pool: None,
+        guardian_multisig: config.guardian_multisig,
+        governance_vote_required: false,
+    };
+
+    env.storage().persistent().set(&state_key, &state);
+
+    crate::events::CircuitBreakerActivatedEvent {
+        activated_by: caller,
+        emergency_mode: true,
+        timestamp: now,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Activate Tier 3 halt (full protocol)
+pub fn activate_tier3_halt(
+    env: &Env,
+    caller: Address,
+    reason: CircuitBreakerReason,
+) -> Result<(), LendingError> {
+    caller.require_auth();
+
+    let admin = crate::admin::get_admin(env).ok_or(LendingError::Unauthorized)?;
+    let config = get_circuit_breaker_config(env);
+    let is_guardian = config.guardian_multisig.as_ref() == Some(&caller);
+
+    if caller != admin && !is_guardian {
+        return Err(LendingError::Unauthorized);
+    }
+
+    let now = env.ledger().timestamp();
+
+    let state = CircuitBreakerState {
+        status: CircuitBreakerStatus::Tier3Halted,
+        tier: CircuitBreakerTier::Tier3,
+        activated_at: now,
+        activated_by: caller.clone(),
+        cooldown_period: 0,
+        auto_deactivate_at: None,
+        reason: reason.clone(),
+        affected_pool: None,
+        guardian_multisig: config.guardian_multisig,
+        governance_vote_required: true,
+    };
+
+    let state_key = storage::DataKey::CircuitBreakerState;
+    env.storage().persistent().set(&state_key, &state);
+
+    crate::events::CircuitBreakerActivatedEvent {
+        activated_by: caller,
+        emergency_mode: true,
+        timestamp: now,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Check automatic trigger conditions
+pub fn check_automatic_triggers(
+    env: &Env,
+    pool_address: &Address,
+    price_deviation_bps: u64,
+    utilization_bps: u64,
+) -> Result<Option<CircuitBreakerTier>, LendingError> {
+    let config = get_circuit_breaker_config(env);
+
+    let state_key = storage::DataKey::CircuitBreakerState;
+    let current_state: CircuitBreakerState = env
+        .storage()
+        .persistent()
+        .get(&state_key)
+        .ok_or(LendingError::NotFound)?;
+
+    if current_state.status != CircuitBreakerStatus::Active {
+        return Ok(None);
+    }
+
+    if config.tier1_auto_trigger_enabled && price_deviation_bps >= config.price_deviation_threshold_bps {
+        return Ok(Some(CircuitBreakerTier::Tier1));
+    }
+
+    if config.tier2_auto_trigger_enabled && utilization_bps >= config.abnormal_utilization_threshold_bps {
+        return Ok(Some(CircuitBreakerTier::Tier2));
+    }
+
+    Ok(None)
+}
+
+/// Deactivate circuit breaker with governance check for Tier 3
+pub fn deactivate_tiered_circuit_breaker(
+    env: &Env,
+    caller: Address,
+    governance_approved: bool,
+) -> Result<(), LendingError> {
+    caller.require_auth();
+
+    let admin = crate::admin::get_admin(env).ok_or(LendingError::Unauthorized)?;
+    let state_key = storage::DataKey::CircuitBreakerState;
+    let mut state: CircuitBreakerState = env
+        .storage()
+        .persistent()
+        .get(&state_key)
+        .ok_or(LendingError::NotFound)?;
+
+    let is_guardian = state.guardian_multisig.as_ref() == Some(&caller);
+
+    if caller != admin && !is_guardian {
+        return Err(LendingError::Unauthorized);
+    }
+
+    if state.status == CircuitBreakerStatus::Active {
+        return Err(LendingError::InvalidState);
+    }
+
+    if state.tier == CircuitBreakerTier::Tier3 && !governance_approved {
+        return Err(LendingError::Unauthorized);
+    }
+
+    state.status = CircuitBreakerStatus::Active;
+    state.auto_deactivate_at = None;
+    state.governance_vote_required = false;
+    env.storage().persistent().set(&state_key, &state);
+
+    crate::events::CircuitBreakerDeactivatedEvent {
+        deactivated_by: caller,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Check if operation is allowed based on current tier
+pub fn is_operation_allowed(
+    env: &Env,
+    operation_type: &str,
+    pool_address: &Address,
+    caller: &Address,
+) -> Result<bool, LendingError> {
+    let state = get_circuit_breaker_state(env)?;
+
+    match state.status {
+        CircuitBreakerStatus::Active => Ok(true),
+        CircuitBreakerStatus::Tier1Paused => {
+            if state.affected_pool.as_ref() == Some(pool_address) {
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        }
+        CircuitBreakerStatus::Tier2Paused => {
+            Ok(false)
+        }
+        CircuitBreakerStatus::Tier3Halted => {
+            is_whitelisted(env, caller)
+        }
+    }
 }
 
 #[cfg(test)]

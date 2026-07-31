@@ -1,8 +1,12 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Ledger}, vec, Address, Env, String, symbol_short};
-use crate::types::{ProtocolType, MigrationStatus};
+use crate::types::{MigrationStatus, ProtocolType};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Ledger},
+    vec, Address, Env, String,
+};
 
 #[test]
 fn test_migration_stellar_other() {
@@ -14,7 +18,7 @@ fn test_migration_stellar_other() {
     let lending = Address::generate(&env);
     let bridge = Address::generate(&env);
     let asset = env.register_stellar_asset_contract(admin.clone());
-    
+
     let contract_id = env.register_contract(None, MigrationHub);
     let client = MigrationHubClient::new(&env, &contract_id);
 
@@ -53,7 +57,7 @@ fn test_migration_deadline_exceeded() {
     let lending = Address::generate(&env);
     let bridge = Address::generate(&env);
     let asset = Address::generate(&env);
-    
+
     let contract_id = env.register_contract(None, MigrationHub);
     let client = MigrationHubClient::new(&env, &contract_id);
 

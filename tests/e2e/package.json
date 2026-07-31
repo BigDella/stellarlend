@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "test": "jest --runInBand --forceExit",
-    "test:verbose": "jest --runInBand --forceExit --verbose"
+    "test:verbose": "jest --runInBand --forceExit --verbose",
+    "test:report": "jest --runInBand --forceExit --json --outputFile=e2e-report.json"
   },
   "dependencies": {
     "axios": "^1.6.2",

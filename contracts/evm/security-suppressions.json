@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "description": "Reviewed false positives for the EVM security audit pipeline. Prefer narrow matches and include an expiry when possible.",
+  "suppressions": []
+}

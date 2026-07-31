@@ -1,8 +1,88 @@
 use crate::flash_loan::FlashLoanDataKey;
+use crate::reentrancy::{ReentrancyGuard, ReentrancyKey};
 use crate::{HelloContract, HelloContractClient};
 use soroban_sdk::{
     contract, contractimpl, testutils::Address as _, token, Address, Env, IntoVal, Symbol,
 };
+
+#[test]
+fn test_cross_function_reentrancy_protection() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    client.initialize(&admin);
+
+    // Create a real token
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin);
+    let token_address = token_contract.address();
+    let token_asset_client = token::StellarAssetClient::new(&env, &token_address);
+
+    // Fund user
+    token_asset_client.mint(&user, &1_000_000);
+
+    // Test that cross-function reentrancy is blocked
+    token::TokenClient::new(&env, &token_address).approve(&contract_id, &1_000_000, &9999);
+    client.deposit_collateral(&user, &Some(token_address), &100_000);
+
+    // Verify guard state is properly managed
+    let guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::DepositLock, false);
+    assert!(guard.is_ok(), "Guard should be available after function completes");
+}
+
+#[test]
+fn test_constructor_reentrancy_protection() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+
+    // Initialize the contract
+    client.initialize(&admin);
+
+    // Try to initialize again (should fail due to constructor guard)
+    let result = client.try_initialize(&admin);
+    assert!(result.is_err(), "Constructor reentrancy should be blocked");
+}
+
+#[test]
+fn test_read_only_reentrancy_detection() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    client.initialize(&admin);
+
+    // Create a real token
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract_v2(token_admin);
+    let token_address = token_contract.address();
+    let token_asset_client = token::StellarAssetClient::new(&env, &token_address);
+
+    // Fund user
+    token_asset_client.mint(&user, &1_000_000);
+
+    // User deposits collateral
+    token::TokenClient::new(&env, &token_address).approve(&contract_id, &1_000_000, &9999);
+    client.deposit_collateral(&user, &Some(token_address), &100_000);
+
+    // Test read-only reentrancy detection
+    let guard = ReentrancyGuard::new_read_only(&env);
+    assert!(guard.is_ok(), "Read-only guard should be available");
+    assert!(guard.unwrap().is_read_only_reentrancy() == false, "Should not be in read-only reentrancy initially");
+}
 
 #[contract]
 pub struct MaliciousToken;

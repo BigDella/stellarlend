@@ -6,10 +6,10 @@
  * amount validity, and coverage limits.
  */
 
-import type { PriceAggregator } from '../services/price-aggregator.js';
-import type { InsuranceClaim, ClaimVerificationResult } from './types.js';
-import { VerificationErrorCode } from './types.js';
-import { logger } from '../utils/logger.js';
+import type { PriceAggregator } from '@/services/price-aggregator';
+import type { InsuranceClaim, ClaimVerificationResult } from './types';
+import { VerificationErrorCode } from './types';
+import { logger } from '@/utils/logger';
 
 /**
  * Verifier configuration.
@@ -166,7 +166,7 @@ export class ClaimVerifier {
       priceAtVerification: oraclePrice.price,
       priceTimestamp: oraclePrice.timestamp,
       confidence: oraclePrice.confidence,
-      sources: oraclePrice.sources.map((s) => s.source),
+      sources: oraclePrice.sources.map((s: { source: string }) => s.source),
       verifiedAt: now,
     };
 

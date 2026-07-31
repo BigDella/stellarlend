@@ -58,6 +58,20 @@ vi.mock('../src/services/index.js', () => ({
     healthCheck: vi.fn().mockResolvedValue(true),
     getAdminPublicKey: vi.fn().mockReturnValue('GTEST123'),
   })),
+  createTWAPService: vi.fn(() => ({
+    recordObservation: vi.fn(),
+    getTWAPStatus: vi.fn(() => ({ twap: 150000n, manipulationDetected: false, deviationBps: 0n })),
+    getStatus: vi.fn(),
+  })),
+  createMetricsService: vi.fn(() => ({
+    start: vi.fn(),
+    stop: vi.fn(),
+    recordUpdate: vi.fn(),
+    recordError: vi.fn(),
+    updateAssetPrice: vi.fn(),
+    updateProviderHealth: vi.fn(),
+    getUptime: vi.fn(),
+  })),
 }));
 
 describe('Oracle Price Staleness Detection', () => {
@@ -105,15 +119,16 @@ describe('Oracle Price Staleness Detection', () => {
   });
 
   it('should log staleness alert if update age exceeds threshold', async () => {
-    // First successful update
+    // First successful update sets lastSuccessfulUpdate
     await service.updatePrices(['XLM']);
-    const firstUpdate = (service as any).lastSuccessfulUpdate;
 
-    // Advance time by 6 minutes (more than 5m threshold)
-    vi.advanceTimersByTime(6 * 60 * 1000);
+    // Set last update far in the past (relative to mocked time)
+    // vi.setSystemTime sets Date.now() to 2026-03-24T12:00:00Z = 1743321600000
+    // Set lastSuccessfulUpdate to 1 hour before that
+    (service as any).lastSuccessfulUpdate = new Date('2026-03-24T11:00:00Z').getTime();
 
     await service.updatePrices(['XLM']);
-    expect(logger.info).toHaveBeenCalled();
+    expect(logStalenessAlert).toHaveBeenCalled();
   });
 
   it('should update lastSuccessfulUpdate after a successful cycle', async () => {

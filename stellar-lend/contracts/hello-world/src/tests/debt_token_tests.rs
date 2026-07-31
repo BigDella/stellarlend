@@ -369,3 +369,187 @@ fn is_address_blocked(env: &Env, address: &Address) -> bool {
         .get(&crate::debt_token::DebtTokenDataKey::BlockedAddress(address.clone()))
         .unwrap_or(false)
 }
+
+// ── Issue #664: minimal fixed-price secondary-market listing ──────────────────
+
+use crate::debt_token::{buy_listed_debt_token, cancel_listing, get_listing, list_debt_token};
+
+fn setup_payment_token(env: &Env, admin: &Address) -> Address {
+    env.register_stellar_asset_contract_v2(admin.clone())
+        .address()
+}
+
+#[test]
+fn test_list_and_buy_debt_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let collateral_asset = Some(Address::generate(&env));
+
+    setup_admin(&env);
+    let token_id = mint_debt_token(&env, seller.clone(), collateral_asset, 1_000_000, 500).unwrap();
+
+    let payment_token = setup_payment_token(&env, &admin);
+    let payment_client = soroban_sdk::token::StellarAssetClient::new(&env, &payment_token);
+    payment_client.mint(&buyer, &500_000i128);
+
+    list_debt_token(&env, seller.clone(), token_id, 500_000i128, payment_token.clone()).unwrap();
+    let listing = get_listing(&env, token_id).unwrap();
+    assert_eq!(listing.seller, seller);
+    assert_eq!(listing.price, 500_000i128);
+
+    buy_listed_debt_token(&env, buyer.clone(), token_id).unwrap();
+
+    // Ownership moved to the buyer, listing is cleared, and payment settled.
+    let buyer_tokens = get_user_debt_tokens(&env, &buyer);
+    assert!(buyer_tokens.contains(&token_id));
+    let seller_tokens = get_user_debt_tokens(&env, &seller);
+    assert!(!seller_tokens.contains(&token_id));
+    assert!(get_listing(&env, token_id).is_none());
+
+    let payment_view = soroban_sdk::token::TokenClient::new(&env, &payment_token);
+    assert_eq!(payment_view.balance(&buyer), 0);
+    assert_eq!(payment_view.balance(&seller), 500_000i128);
+}
+
+#[test]
+fn test_cannot_list_token_you_do_not_own() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let seller = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let collateral_asset = Some(Address::generate(&env));
+
+    setup_admin(&env);
+    let token_id = mint_debt_token(&env, seller, collateral_asset, 1_000_000, 500).unwrap();
+    let payment_token = setup_payment_token(&env, &admin);
+
+    let result = list_debt_token(&env, impostor, token_id, 100i128, payment_token);
+    assert_eq!(result.unwrap_err(), DebtTokenError::Unauthorized);
+}
+
+#[test]
+fn test_cannot_list_at_zero_or_negative_price() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let seller = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let collateral_asset = Some(Address::generate(&env));
+
+    setup_admin(&env);
+    let token_id = mint_debt_token(&env, seller.clone(), collateral_asset, 1_000_000, 500).unwrap();
+    let payment_token = setup_payment_token(&env, &admin);
+
+    let result = list_debt_token(&env, seller, token_id, 0i128, payment_token);
+    assert_eq!(result.unwrap_err(), DebtTokenError::InvalidPrice);
+}
+
+#[test]
+fn test_cannot_double_list_same_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let seller = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let collateral_asset = Some(Address::generate(&env));
+
+    setup_admin(&env);
+    let token_id = mint_debt_token(&env, seller.clone(), collateral_asset, 1_000_000, 500).unwrap();
+    let payment_token = setup_payment_token(&env, &admin);
+
+    list_debt_token(&env, seller.clone(), token_id, 100i128, payment_token.clone()).unwrap();
+    let result = list_debt_token(&env, seller, token_id, 200i128, payment_token);
+    assert_eq!(result.unwrap_err(), DebtTokenError::AlreadyListed);
+}
+
+#[test]
+fn test_seller_can_cancel_listing() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let seller = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let collateral_asset = Some(Address::generate(&env));
+
+    setup_admin(&env);
+    let token_id = mint_debt_token(&env, seller.clone(), collateral_asset, 1_000_000, 500).unwrap();
+    let payment_token = setup_payment_token(&env, &admin);
+
+    list_debt_token(&env, seller.clone(), token_id, 100i128, payment_token).unwrap();
+    cancel_listing(&env, seller.clone(), token_id).unwrap();
+    assert!(get_listing(&env, token_id).is_none());
+}
+
+#[test]
+fn test_non_seller_cannot_cancel_listing() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let seller = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let collateral_asset = Some(Address::generate(&env));
+
+    setup_admin(&env);
+    let token_id = mint_debt_token(&env, seller.clone(), collateral_asset, 1_000_000, 500).unwrap();
+    let payment_token = setup_payment_token(&env, &admin);
+
+    list_debt_token(&env, seller, token_id, 100i128, payment_token).unwrap();
+    let result = cancel_listing(&env, impostor, token_id);
+    assert_eq!(result.unwrap_err(), DebtTokenError::NotSeller);
+}
+
+#[test]
+fn test_buying_unlisted_token_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let collateral_asset = Some(Address::generate(&env));
+
+    setup_admin(&env);
+    let token_id = mint_debt_token(&env, seller, collateral_asset, 1_000_000, 500).unwrap();
+
+    let result = buy_listed_debt_token(&env, buyer, token_id);
+    assert_eq!(result.unwrap_err(), DebtTokenError::NotListed);
+}
+
+#[test]
+fn test_buying_respects_transfer_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let token_issuer = Address::generate(&env);
+    let collateral_asset = Some(Address::generate(&env));
+
+    setup_admin(&env);
+    let real_admin: Address = env
+        .storage()
+        .persistent()
+        .get(&DepositDataKey::Admin)
+        .unwrap();
+    let token_id = mint_debt_token(&env, seller.clone(), collateral_asset, 1_000_000, 500).unwrap();
+
+    let payment_token = setup_payment_token(&env, &token_issuer);
+    let payment_client = soroban_sdk::token::StellarAssetClient::new(&env, &payment_token);
+    payment_client.mint(&buyer, &500_000i128);
+
+    list_debt_token(&env, seller.clone(), token_id, 500_000i128, payment_token).unwrap();
+
+    // Pausing transfers after listing must still block the eventual sale — the
+    // listing mechanism doesn't bypass the same safety switch a direct transfer
+    // respects.
+    set_transfer_pause(&env, real_admin, true).unwrap();
+
+    let result = buy_listed_debt_token(&env, buyer, token_id);
+    assert_eq!(result.unwrap_err(), DebtTokenError::TransferPaused);
+}

@@ -14,10 +14,90 @@ export const SUBSCRIPTION_INTERVALS = [
   'yearly',
 ] as const;
 
+export const RECURRING_ACTIONS = ['deposit', 'borrow', 'repay'] as const;
+
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
 export type SubscriptionInterval = (typeof SUBSCRIPTION_INTERVALS)[number];
+export type RecurringAction = (typeof RECURRING_ACTIONS)[number];
 export type ImportFormat = 'csv' | 'json';
 export type ImportAction = 'create' | 'update' | 'skip';
+export type ExecutionStatus = 'pending' | 'executing' | 'success' | 'failed' | 'insufficient_balance' | 'skipped';
+
+// ─── Recurring Operation Subscription ─────────────────────────────────────────
+
+export interface RecurringSubscription {
+  id: string;
+  userAddress: string;
+  action: RecurringAction;
+  amount: string;
+  assetAddress?: string;
+  interval: SubscriptionInterval;
+  frequency: number; // e.g., every N intervals
+  startDate: string;
+  endDate?: string;
+  nextExecutionAt: string;
+  lastExecutionAt?: string;
+  status: SubscriptionStatus;
+  maxRetries: number;
+  retryCount: number;
+  totalExecutions: number;
+  successfulExecutions: number;
+  failedExecutions: number;
+  totalAmountProcessed: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateRecurringSubscriptionRequest {
+  userAddress: string;
+  action: RecurringAction;
+  amount: string;
+  assetAddress?: string;
+  interval: SubscriptionInterval;
+  frequency?: number;
+  startDate?: string;
+  endDate?: string;
+  maxRetries?: number;
+}
+
+export interface UpdateRecurringSubscriptionRequest {
+  amount?: string;
+  interval?: SubscriptionInterval;
+  frequency?: number;
+  endDate?: string;
+  maxRetries?: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ExecutionRecord {
+  id: string;
+  subscriptionId: string;
+  userAddress: string;
+  action: RecurringAction;
+  amount: string;
+  status: ExecutionStatus;
+  transactionHash?: string;
+  errorMessage?: string;
+  executedAt: string;
+  retryNumber: number;
+}
+
+export interface SubscriptionAnalytics {
+  subscriptionId: string;
+  userAddress: string;
+  action: RecurringAction;
+  totalExecutions: number;
+  successfulExecutions: number;
+  failedExecutions: number;
+  successRate: number;
+  totalAmountProcessed: string;
+  averageExecutionTimeMs: number;
+  lastExecutionStatus?: ExecutionStatus;
+  daysSinceLastExecution?: number;
+}
+
+// ─── Original import/export types (preserved) ─────────────────────────────────
 
 export interface SubscriptionRecord {
   merchantId: string;

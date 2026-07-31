@@ -1,20 +1,132 @@
 version: '3.8'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# StellarLend – Local Development Environment
+#
+# One-command startup:  docker compose up
+# Hot-reload API:       code changes in ./api/src are reflected immediately
+# Bypass hook:          git commit --no-verify
+#
+# Services:
+#   api       – Node.js REST API (hot-reload via ts-node-dev)
+#   oracle    – Mock price oracle service
+#   redis     – Cache / idempotency store
+#   postgres  – Persistent relational store (audit logs, subscriptions)
+#
+# ARM / M1 compatibility: all images use multi-arch manifests (linux/amd64,
+# linux/arm64). The postgres and redis images ship native ARM builds.
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-common-env: &common-env
+  NODE_ENV: development
+  LOG_LEVEL: debug
+
 services:
+  # ── API ────────────────────────────────────────────────────────────────────
   api:
     build:
       context: ./api
       dockerfile: Dockerfile
+      target: development          # uses the dev stage with ts-node-dev
     ports:
-      - "3000:3000"
-    env_file:
-      - ./api/.env
+      - "${API_PORT:-3000}:3000"
+    environment:
+      <<: *common-env
+      PORT: 3000
+      STELLAR_NETWORK: testnet
+      HORIZON_URL: https://horizon-testnet.stellar.org
+      SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
+      NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+      CONTRACT_ID: ${CONTRACT_ID:-PLACEHOLDER_CONTRACT_ID}
+      JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production}
+      JWT_EXPIRES_IN: 24h
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://stellarlend:stellarlend@postgres:5432/stellarlend
+      ORACLE_API_URL: http://oracle:4000/prices
+      RATE_LIMIT_WINDOW_MS: 900000
+      RATE_LIMIT_MAX_REQUESTS: 1000   # relaxed for local dev
+      BODY_SIZE_LIMIT: 100kb
+    volumes:
+      # Hot-reload: mount source so ts-node-dev picks up changes
+      - ./api/src:/app/src:delegated
+      - ./api/package.json:/app/package.json:ro
+      - ./api/tsconfig.json:/app/tsconfig.json:ro
+      # Exclude node_modules from host mount (use container's copy)
+      - api_node_modules:/app/node_modules
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
+  # ── Oracle (mock price feed) ───────────────────────────────────────────────
   oracle:
     build:
       context: ./oracle
       dockerfile: Dockerfile
-    env_file:
-      - ./oracle/.env
+    ports:
+      - "${ORACLE_PORT:-4000}:4000"
+    environment:
+      <<: *common-env
+      PORT: 4000
+      UPDATE_INTERVAL_MS: 5000
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    platform: linux/amd64
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    platform: linux/amd64
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: stellarlend
+      POSTGRES_PASSWORD: stellarlend
+      POSTGRES_DB: stellarlend
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./api/db/init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stellarlend -d stellarlend"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
+  postgres_data:
+  api_node_modules:
+
+networks:
+  default:
+    name: stellarlend-dev

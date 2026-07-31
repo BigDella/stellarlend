@@ -1,0 +1,26 @@
+[package]
+name = "lending-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+lending-types = { path = "../lending-types" }
+
+[dev-dependencies]
+test-utils = { path = "../test-utils" }
+
+[features]
+default = []
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+lto = true
+panic = "abort"
+codegen-units = 1

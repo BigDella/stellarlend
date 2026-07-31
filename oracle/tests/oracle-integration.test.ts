@@ -88,9 +88,9 @@ describe('OracleService Integration', () => {
     };
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (service) {
-      service.stop();
+      await service.stop();
     }
   });
 
@@ -147,7 +147,7 @@ describe('OracleService Integration', () => {
       await service.start(['XLM']);
       expect(service.getStatus().isRunning).toBe(true);
 
-      service.stop();
+      await service.stop();
       expect(service.getStatus().isRunning).toBe(false);
     });
 
@@ -165,20 +165,20 @@ describe('OracleService Integration', () => {
       expect(secondStart).toBe(true);
     });
 
-    it('should handle stop when not running', () => {
+    it('should handle stop when not running', async () => {
       service = new OracleService(mockConfig);
 
       // Stop without starting
-      expect(() => service.stop()).not.toThrow();
+      await expect(service.stop()).resolves.not.toThrow();
     });
 
     it('should handle multiple stop calls', async () => {
       service = new OracleService(mockConfig);
 
       await service.start(['XLM']);
-      service.stop();
+      await service.stop();
 
-      expect(() => service.stop()).not.toThrow();
+      await expect(service.stop()).resolves.not.toThrow();
     });
   });
 
@@ -216,7 +216,7 @@ describe('OracleService Integration', () => {
       // Allow time for at least one update cycle
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      service.stop();
+      await service.stop();
     });
 
     it('should handle unsupported assets gracefully', async () => {
@@ -330,7 +330,7 @@ describe('OracleService Integration', () => {
       await service.start(['XLM']);
       expect(service.getStatus().isRunning).toBe(true);
 
-      service.stop();
+      await service.stop();
 
       const afterStatus = service.getStatus();
       expect(afterStatus.isRunning).toBe(false);
@@ -398,7 +398,7 @@ describe('OracleService Integration', () => {
       const status = service.getStatus();
       expect(status.isRunning).toBe(true);
 
-      service.stop();
+      await service.stop();
     });
 
     it('should handle contract updater failures', async () => {

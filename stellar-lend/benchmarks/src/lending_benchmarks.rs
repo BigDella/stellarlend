@@ -12,7 +12,12 @@ use crate::framework::{
     fresh_env, get_budget, measure_instructions, BenchmarkResult, BenchmarkSuite, RunConfig,
 };
 use soroban_sdk::{contract, contractimpl, testutils::Address as _, token, Address, Bytes, Env};
-use stellarlend_lending::{LendingContract, LendingContractClient, PauseType};
+use stellarlend_lending::{
+    interest::{advance_index, interest_for, INDEX_SCALE},
+    InterestRateConfigUpdate, InterestRateModelKind,
+    liquidation::{plan_liquidation, PositionSnapshot},
+    LendingContract, LendingContractClient, PauseType,
+};
 
 const CONTRACT: &str = "lending";
 
@@ -54,6 +59,12 @@ fn run_all(config: &RunConfig) -> Vec<BenchmarkResult> {
         bench_withdraw_cold(config),
         bench_withdraw_warm(config),
         bench_liquidate(config),
+        bench_liquidation_plan_optimized(config),
+        bench_liquidation_plan_scale_100(config),
+        bench_liquidation_flash_loan_plan(config),
+        bench_interest_full_recompute(config),
+        bench_interest_incremental_update(config),
+        bench_interest_same_block_cached(config),
         bench_flash_loan(config),
         bench_get_health_factor(config),
         bench_get_user_position(config),
@@ -63,6 +74,10 @@ fn run_all(config: &RunConfig) -> Vec<BenchmarkResult> {
         bench_set_pause(config),
         bench_set_flash_loan_fee(config),
         bench_set_liquidation_threshold(config),
+        bench_update_interest_rate_model_linear(config),
+        bench_update_interest_rate_model_kink(config),
+        bench_update_interest_rate_model_jump(config),
+        bench_update_interest_rate_model_exponential(config),
         bench_deposit_multiple_assets_storage(config),
     ]
 }
@@ -149,6 +164,19 @@ fn bench_initialize_deposit_settings(config: &RunConfig) -> BenchmarkResult {
         get_budget(config, op),
         vec!["admin".into(), "settings".into()],
     )
+}
+
+fn interest_model_update(model: InterestRateModelKind) -> InterestRateConfigUpdate {
+    InterestRateConfigUpdate {
+        model: Some(model as u32),
+        base_rate_bps: None,
+        kink_utilization_bps: None,
+        slope_bps: None,
+        jump_slope_bps: None,
+        rate_floor_bps: None,
+        rate_ceiling_bps: None,
+        spread_bps: None,
+    }
 }
 
 // ─── Deposit ──────────────────────────────────────────────────────────────────
@@ -401,6 +429,191 @@ fn bench_liquidate(config: &RunConfig) -> BenchmarkResult {
     )
 }
 
+fn liquidation_snapshot(position_size: i128) -> PositionSnapshot {
+    PositionSnapshot {
+        collateral_value: position_size * 80 / 100,
+        debt_value: position_size,
+        liquidation_threshold_bps: 8_000,
+        close_factor_bps: 5_000,
+        liquidation_incentive_bps: 1_000,
+        oracle_timestamp: 1_000,
+    }
+}
+
+fn bench_liquidation_plan_optimized(config: &RunConfig) -> BenchmarkResult {
+    let op = "lending::liquidate_plan_optimized";
+    let env = fresh_env();
+    let snapshot = liquidation_snapshot(1_000_000);
+
+    let (insns, mem) = measure_instructions(&env, || {
+        let plan = plan_liquidation(&snapshot, 250_000, 1_030, 60, 1_000).unwrap();
+        assert_eq!(plan.repay_value, 250_000);
+    });
+
+    BenchmarkResult::new(
+        op,
+        CONTRACT,
+        "Optimized liquidation planning only: batched snapshot, early checks, gas-profit guard",
+        insns,
+        mem,
+        1,
+        0,
+        false,
+        get_budget(config, op),
+        vec!["liquidate".into(), "optimized".into(), "early_exit".into()],
+    )
+}
+
+fn bench_liquidation_plan_scale_100(config: &RunConfig) -> BenchmarkResult {
+    let op = "lending::liquidate_plan_optimized_scale_100";
+    let env = fresh_env();
+    let positions: std::vec::Vec<PositionSnapshot> = (1..=100)
+        .map(|n| liquidation_snapshot(100_000 * n))
+        .collect();
+
+    let (insns, mem) = measure_instructions(&env, || {
+        let mut total_bonus = 0;
+        for snapshot in positions.iter() {
+            let plan =
+                plan_liquidation(snapshot, snapshot.debt_value / 4, 1_030, 60, 1_000).unwrap();
+            total_bonus += plan.bonus_value;
+        }
+        assert!(total_bonus > 0);
+    });
+
+    BenchmarkResult::new(
+        op,
+        CONTRACT,
+        "Optimized liquidation planning across 100 positions for scale regression detection",
+        insns,
+        mem,
+        100,
+        0,
+        false,
+        get_budget(config, op),
+        vec!["liquidate".into(), "optimized".into(), "scale_100".into()],
+    )
+}
+
+fn bench_liquidation_flash_loan_plan(config: &RunConfig) -> BenchmarkResult {
+    let op = "lending::liquidate_flash_loan_plan";
+    let env = fresh_env();
+    let snapshot = liquidation_snapshot(1_000_000);
+
+    let (insns, mem) = measure_instructions(&env, || {
+        let plan = plan_liquidation(&snapshot, 500_000, 1_030, 60, 1_500).unwrap();
+        let flash_loan_principal = plan.repay_value;
+        let flash_loan_fee = flash_loan_principal * 50 / 10_000;
+        assert!(plan.bonus_value > flash_loan_fee);
+    });
+
+    BenchmarkResult::new(
+        op,
+        CONTRACT,
+        "Flash-loan-assisted liquidation plan: repay sizing plus profitability after loan fee",
+        insns,
+        mem,
+        1,
+        0,
+        false,
+        get_budget(config, op),
+        vec![
+            "liquidate".into(),
+            "flash_loan".into(),
+            "profit_guard".into(),
+        ],
+    )
+}
+
+fn bench_interest_full_recompute(config: &RunConfig) -> BenchmarkResult {
+    let op = "lending::interest_full_recompute";
+    let env = fresh_env();
+    let principal = 1_000_000;
+    let rate_bps = 650;
+    let one_day = 86_400;
+
+    let (insns, mem) = measure_instructions(&env, || {
+        let mut total = 0;
+        for day in 1..=30 {
+            let index = advance_index(INDEX_SCALE, rate_bps, one_day * day).unwrap();
+            total += interest_for(principal, INDEX_SCALE, index).unwrap();
+        }
+        assert!(total > 0);
+    });
+
+    BenchmarkResult::new(
+        op,
+        CONTRACT,
+        "Baseline full interest recompute over 30 elapsed windows",
+        insns,
+        mem,
+        30,
+        0,
+        false,
+        get_budget(config, op),
+        vec![
+            "interest".into(),
+            "baseline".into(),
+            "full_recompute".into(),
+        ],
+    )
+}
+
+fn bench_interest_incremental_update(config: &RunConfig) -> BenchmarkResult {
+    let op = "lending::interest_incremental_update";
+    let env = fresh_env();
+    let rate_bps = 650;
+    let one_day = 86_400;
+
+    let (insns, mem) = measure_instructions(&env, || {
+        let mut index = INDEX_SCALE;
+        for _ in 0..30 {
+            index = advance_index(index, rate_bps, one_day).unwrap();
+        }
+        assert!(index > INDEX_SCALE);
+    });
+
+    BenchmarkResult::new(
+        op,
+        CONTRACT,
+        "Incremental interest cache update: advance cumulative index by daily deltas",
+        insns,
+        mem,
+        1,
+        1,
+        false,
+        get_budget(config, op),
+        vec![
+            "interest".into(),
+            "incremental".into(),
+            "cached_index".into(),
+        ],
+    )
+}
+
+fn bench_interest_same_block_cached(config: &RunConfig) -> BenchmarkResult {
+    let op = "lending::interest_same_block_cached";
+    let env = fresh_env();
+
+    let (insns, mem) = measure_instructions(&env, || {
+        let index = advance_index(INDEX_SCALE, 650, 0).unwrap();
+        assert_eq!(index, INDEX_SCALE);
+    });
+
+    BenchmarkResult::new(
+        op,
+        CONTRACT,
+        "Same-block interest cache no-op: batched operations charge interest once",
+        insns,
+        mem,
+        1,
+        0,
+        false,
+        get_budget(config, op),
+        vec!["interest".into(), "same_block".into(), "no_write".into()],
+    )
+}
+
 // ─── Flash Loan ───────────────────────────────────────────────────────────────
 
 fn bench_flash_loan(config: &RunConfig) -> BenchmarkResult {
@@ -631,6 +844,69 @@ fn bench_set_liquidation_threshold(config: &RunConfig) -> BenchmarkResult {
 // ─── Storage pattern benchmarks ───────────────────────────────────────────────
 
 /// Benchmark storage cost growth with multiple assets deposited
+fn bench_update_interest_rate_model(
+    config: &RunConfig,
+    model: InterestRateModelKind,
+    op: &'static str,
+) -> BenchmarkResult {
+    let env = fresh_env();
+    let (client, admin) = setup_admin_initialized(&env);
+    let update = interest_model_update(model);
+
+    let (insns, mem) = measure_instructions(&env, || {
+        client.update_interest_rate_model(&admin, &update);
+    });
+
+    BenchmarkResult::new(
+        op,
+        CONTRACT,
+        "Switch configurable interest rate model",
+        insns,
+        mem,
+        1,
+        1,
+        false,
+        get_budget(config, op),
+        vec![
+            "admin".into(),
+            "interest_rate".into(),
+            "model_switch".into(),
+        ],
+    )
+}
+
+fn bench_update_interest_rate_model_linear(config: &RunConfig) -> BenchmarkResult {
+    bench_update_interest_rate_model(
+        config,
+        InterestRateModelKind::Linear,
+        "lending::interest_rate_model_linear",
+    )
+}
+
+fn bench_update_interest_rate_model_kink(config: &RunConfig) -> BenchmarkResult {
+    bench_update_interest_rate_model(
+        config,
+        InterestRateModelKind::Kink,
+        "lending::interest_rate_model_kink",
+    )
+}
+
+fn bench_update_interest_rate_model_jump(config: &RunConfig) -> BenchmarkResult {
+    bench_update_interest_rate_model(
+        config,
+        InterestRateModelKind::Jump,
+        "lending::interest_rate_model_jump",
+    )
+}
+
+fn bench_update_interest_rate_model_exponential(config: &RunConfig) -> BenchmarkResult {
+    bench_update_interest_rate_model(
+        config,
+        InterestRateModelKind::Exponential,
+        "lending::interest_rate_model_exponential",
+    )
+}
+
 fn bench_deposit_multiple_assets_storage(config: &RunConfig) -> BenchmarkResult {
     let op = "lending::deposit_multi_asset_storage";
     let env = fresh_env();

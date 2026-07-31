@@ -73,6 +73,7 @@ fn test_rate_model_update_emits_event() {
     client.update_interest_rate_model(
         &admin,
         &InterestRateConfigUpdate {
+            model: None,
             base_rate_bps: Some(200),
             kink_utilization_bps: None,
             slope_bps: None,
@@ -85,9 +86,76 @@ fn test_rate_model_update_emits_event() {
 
     let events = env.events().all();
     let last = events.last().unwrap();
-    let topic0 = last.topics.get(0).unwrap();
-    let sym: Symbol = Symbol::try_from_val(&env, topic0).unwrap();
+    let topic0 = last.1.get(0).unwrap();
+    let sym: Symbol = Symbol::try_from_val(&env, &topic0).unwrap();
     assert_eq!(sym, Symbol::new(&env, "interest_rate_model_updated"));
 
     assert_eq!(client.get_borrow_rate_bps(), 200);
+}
+
+#[test]
+fn test_can_switch_between_prebuilt_rate_models() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, user, asset) = setup(&env, 100_000);
+    let collateral_asset = Address::generate(&env);
+    client.borrow(&user, &asset, &90_000, &collateral_asset, &135_000);
+
+    client.update_interest_rate_model(
+        &admin,
+        &InterestRateConfigUpdate {
+            model: Some(InterestRateModelKind::Linear as u32),
+            base_rate_bps: None,
+            kink_utilization_bps: None,
+            slope_bps: None,
+            jump_slope_bps: None,
+            rate_floor_bps: None,
+            rate_ceiling_bps: None,
+            spread_bps: None,
+        },
+    );
+    assert_eq!(
+        client.get_interest_rate_model(),
+        InterestRateModelKind::Linear
+    );
+    assert_eq!(client.get_borrow_rate_bps(), 1900);
+
+    client.update_interest_rate_model(
+        &admin,
+        &InterestRateConfigUpdate {
+            model: Some(InterestRateModelKind::Jump as u32),
+            base_rate_bps: None,
+            kink_utilization_bps: None,
+            slope_bps: None,
+            jump_slope_bps: None,
+            rate_floor_bps: None,
+            rate_ceiling_bps: None,
+            spread_bps: None,
+        },
+    );
+    assert_eq!(
+        client.get_interest_rate_model(),
+        InterestRateModelKind::Jump
+    );
+    assert_eq!(client.get_borrow_rate_bps(), 6900);
+
+    client.update_interest_rate_model(
+        &admin,
+        &InterestRateConfigUpdate {
+            model: Some(InterestRateModelKind::Exponential as u32),
+            base_rate_bps: None,
+            kink_utilization_bps: None,
+            slope_bps: None,
+            jump_slope_bps: None,
+            rate_floor_bps: None,
+            rate_ceiling_bps: None,
+            spread_bps: None,
+        },
+    );
+    assert_eq!(
+        client.get_interest_rate_model(),
+        InterestRateModelKind::Exponential
+    );
+    assert_eq!(client.get_borrow_rate_bps(), 9010);
 }

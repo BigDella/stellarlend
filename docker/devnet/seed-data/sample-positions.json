@@ -1,0 +1,164 @@
+{
+  "network": "local",
+  "description": "Sample lending positions seeded into the devnet for testing",
+  "positions": {
+    "deposits": [
+      {
+        "id": "deposit-001",
+        "account": "user1",
+        "asset": "XLM",
+        "amount": "50000.0000000",
+        "timestamp": "2025-01-01T10:00:00Z",
+        "status": "active",
+        "apy": "3.25"
+      },
+      {
+        "id": "deposit-002",
+        "account": "user2",
+        "asset": "USDC",
+        "amount": "100000.0000000",
+        "timestamp": "2025-01-01T10:30:00Z",
+        "status": "active",
+        "apy": "5.10"
+      },
+      {
+        "id": "deposit-003",
+        "account": "user2",
+        "asset": "XLM",
+        "amount": "200000.0000000",
+        "timestamp": "2025-01-01T11:00:00Z",
+        "status": "active",
+        "apy": "3.25"
+      },
+      {
+        "id": "deposit-004",
+        "account": "user3",
+        "asset": "ETH",
+        "amount": "10.0000000",
+        "timestamp": "2025-01-02T08:00:00Z",
+        "status": "active",
+        "apy": "2.80"
+      },
+      {
+        "id": "deposit-005",
+        "account": "user5",
+        "asset": "BTC",
+        "amount": "2.0000000",
+        "timestamp": "2025-01-02T09:00:00Z",
+        "status": "active",
+        "apy": "1.50"
+      }
+    ],
+    "active_loans": [
+      {
+        "id": "loan-001",
+        "borrower": "user1",
+        "collateral_asset": "XLM",
+        "collateral_amount": "50000.0000000",
+        "borrow_asset": "USDC",
+        "borrow_amount": "2500.0000000",
+        "interest_rate": "7.50",
+        "collateral_ratio": "250.00",
+        "health_factor": "1.85",
+        "timestamp": "2025-01-01T12:00:00Z",
+        "status": "active"
+      },
+      {
+        "id": "loan-002",
+        "borrower": "user3",
+        "collateral_asset": "ETH",
+        "collateral_amount": "10.0000000",
+        "borrow_asset": "USDC",
+        "borrow_amount": "25000.0000000",
+        "interest_rate": "8.20",
+        "collateral_ratio": "140.00",
+        "health_factor": "1.12",
+        "timestamp": "2025-01-02T14:00:00Z",
+        "status": "active",
+        "note": "Near liquidation threshold -- use for liquidation testing"
+      },
+      {
+        "id": "loan-003",
+        "borrower": "user4",
+        "collateral_asset": "XLM",
+        "collateral_amount": "80000.0000000",
+        "borrow_asset": "slUSD",
+        "borrow_amount": "5000.0000000",
+        "interest_rate": "6.00",
+        "collateral_ratio": "200.00",
+        "health_factor": "1.60",
+        "timestamp": "2025-01-03T09:30:00Z",
+        "status": "active"
+      }
+    ],
+    "pending_liquidations": [
+      {
+        "id": "liq-001",
+        "loan_id": "loan-002",
+        "borrower": "user3",
+        "collateral_asset": "ETH",
+        "collateral_amount": "10.0000000",
+        "debt_asset": "USDC",
+        "debt_amount": "25000.0000000",
+        "current_collateral_ratio": "118.00",
+        "liquidation_threshold": "125.00",
+        "health_factor": "0.94",
+        "liquidation_bonus": "5.00",
+        "max_liquidatable": "12500.0000000",
+        "status": "pending",
+        "note": "Triggered by ETH price drop scenario. Use oracle ?scenario=bear to trigger."
+      },
+      {
+        "id": "liq-002",
+        "loan_id": "loan-003",
+        "borrower": "user4",
+        "collateral_asset": "XLM",
+        "collateral_amount": "80000.0000000",
+        "debt_asset": "slUSD",
+        "debt_amount": "5000.0000000",
+        "current_collateral_ratio": "120.00",
+        "liquidation_threshold": "125.00",
+        "health_factor": "0.96",
+        "liquidation_bonus": "5.00",
+        "max_liquidatable": "2500.0000000",
+        "status": "pending",
+        "note": "Triggered by XLM crash scenario. Use oracle ?scenario=crash to trigger."
+      }
+    ],
+    "amm_pools": [
+      {
+        "id": "pool-001",
+        "token_a": "XLM",
+        "token_b": "USDC",
+        "reserve_a": "1000000.0000000",
+        "reserve_b": "125000.0000000",
+        "lp_token_supply": "353553.3906250",
+        "fee_rate": "0.30",
+        "provider": "admin"
+      },
+      {
+        "id": "pool-002",
+        "token_a": "XLM",
+        "token_b": "slUSD",
+        "reserve_a": "500000.0000000",
+        "reserve_b": "62500.0000000",
+        "lp_token_supply": "176776.6953125",
+        "fee_rate": "0.30",
+        "provider": "admin"
+      }
+    ],
+    "flash_loans": [
+      {
+        "id": "flash-001",
+        "borrower": "user4",
+        "asset": "USDC",
+        "amount": "50000.0000000",
+        "fee": "45.0000000",
+        "purpose": "arbitrage",
+        "status": "completed",
+        "timestamp": "2025-01-03T15:00:00Z"
+      }
+    ]
+  },
+  "note": "Sample data for local devnet. Health factors and collateral ratios are set to enable testing of both healthy and at-risk positions."
+}

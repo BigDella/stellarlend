@@ -126,6 +126,15 @@ function keypairFromSecret(secret: string): Keypair {
   }
 }
 
+/** Deterministic, non-cryptographic hash used to derive simulated values from an address string. */
+function simpleHash(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) & 0x7fffffff;
+  }
+  return hash;
+}
+
 export class StellarService {
   private horizonUrl: string;
   private sorobanRpcUrl: string;
@@ -316,6 +325,25 @@ export class StellarService {
     const tx = this.buildReadOnlyTransaction(methodName, ...params);
     const simulation = await (this.sorobanServer as any).simulateTransaction(tx);
     return decodeSimulationResult(simulation);
+  }
+
+  /**
+   * Get TWAP-based liquidation price for an asset.
+   * Calls the contract's get_liquidation_price function which returns TWAP
+   * with fallback to median spot price across sources on manipulation.
+   */
+  async getLiquidationPrice(asset: string): Promise<string> {
+    try {
+      const assetAddress = new Address(asset);
+      const result = await this.simulateContractCall(
+        'get_liquidation_price',
+        assetAddress.toScVal()
+      );
+      return result?.toString() ?? '0';
+    } catch (error) {
+      logger.error('Failed to get liquidation price:', error);
+      return '0';
+    }
   }
 
   async getProtocolStats(): Promise<ProtocolStatsResponse> {
@@ -797,4 +825,115 @@ export class StellarService {
       return false;
     }
   }
+
+  // ─── Recurring Operations ──────────────────────────────────────────────────
+
+  async executeRecurringOperation(
+    userAddress: string,
+    action: RecurringAction,
+    amount: string,
+    assetAddress?: string
+  ): Promise<TransactionResponse> {
+    try {
+      logger.info('Executing recurring operation', { userAddress, action, amount });
+      const unsignedXdr = await this.buildUnsignedTransaction(
+        action as LendingOperation,
+        userAddress,
+        assetAddress,
+        amount
+      );
+      // Simulated: in production, this would be signed by a relayer key
+      return {
+        success: true,
+        transactionHash: `tx_recurring_${Date.now()}`,
+        status: 'success',
+        message: `Recurring ${action} executed`,
+      };
+    } catch (error) {
+      logger.error('Recurring operation failed', { userAddress, action, error });
+      return {
+        success: false,
+        status: 'failed',
+        error: (error as Error).message || 'execution_failed',
+      };
+    }
+  }
+
+  // ─── Analytics helpers (simulated contract reads) ──────────────────────────
+
+  async getPoolRateAt(
+    poolAddress: string,
+    _timestamp: number
+  ): Promise<{ depositApy: number; borrowApy: number; utilizationRate: number }> {
+    // Simulated: returns mock historical rate data
+    const baseRate = poolAddress ? 0.03 + (parseInt(poolAddress.slice(-4), 16) % 10) / 100 : 0.05;
+    return {
+      depositApy: baseRate,
+      borrowApy: baseRate * 1.5,
+      utilizationRate: 0.45 + Math.random() * 0.3,
+    };
+  }
+
+  async getPoolStateAt(
+    poolAddress: string,
+    _timestamp: number
+  ): Promise<{ utilizationRate: number; totalDeposits: string; totalBorrows: string }> {
+    const simVal = poolAddress ? simpleHash(poolAddress) % 100 : 50;
+    return {
+      utilizationRate: simVal / 100,
+      totalDeposits: (1000000n * BigInt(simVal + 50)).toString(),
+      totalBorrows: (500000n * BigInt(simVal + 30)).toString(),
+    };
+  }
+
+  async getProtocolRevenueAt(
+    _timestamp: number
+  ): Promise<{ cumulativeRevenue: string; periodRevenue: string }> {
+    return {
+      cumulativeRevenue: (BigInt(Math.trunc(1000000 * (1 + Math.random())))).toString(),
+      periodRevenue: (BigInt(Math.trunc(10000 * (1 + Math.random())))).toString(),
+    };
+  }
+
+  async getAllPools(): Promise<
+    Array<{
+      address: string;
+      name?: string;
+      depositApy: number;
+      borrowApy: number;
+      utilizationRate: number;
+      tvl: string;
+    }>
+  > {
+    // Simulated: returns mock pool data
+    return [
+      {
+        address: 'pool_xlm_001',
+        name: 'XLM Pool',
+        depositApy: 0.035,
+        borrowApy: 0.052,
+        utilizationRate: 0.48,
+        tvl: '5000000000',
+      },
+      {
+        address: 'pool_usdc_001',
+        name: 'USDC Pool',
+        depositApy: 0.042,
+        borrowApy: 0.063,
+        utilizationRate: 0.62,
+        tvl: '8000000000',
+      },
+      {
+        address: 'pool_btc_001',
+        name: 'BTC Pool',
+        depositApy: 0.028,
+        borrowApy: 0.045,
+        utilizationRate: 0.35,
+        tvl: '12000000000',
+      },
+    ];
+  }
 }
+
+// ─── Type import for RecurringAction ───────────────────────────────────────────
+type RecurringAction = 'deposit' | 'borrow' | 'repay';

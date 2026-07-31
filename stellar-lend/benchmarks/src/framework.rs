@@ -16,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 use soroban_sdk::Env;
 use std::collections::HashMap;
+use std::env;
 
 /// Configuration for a benchmark run
 #[derive(Clone, Debug)]
@@ -28,11 +29,26 @@ pub struct RunConfig {
     pub iterations: u32,
     /// Gas budget thresholds per operation (instruction count)
     pub budgets: HashMap<String, u64>,
+    /// Regression threshold percentage (default: 5%)
+    pub regression_threshold: f64,
 }
 
 impl RunConfig {
     pub fn from_args(args: &[String]) -> Self {
         let mut config = Self::default();
+
+        // Load from environment variables first
+        if let Ok(threshold) = env::var("BENCHMARK_REGRESSION_THRESHOLD") {
+            config.regression_threshold = threshold.parse().unwrap_or(5.0);
+        }
+        if let Ok(output) = env::var("BENCHMARK_OUTPUT_JSON") {
+            config.output_file = Some(output);
+        }
+        if let Ok(baseline) = env::var("BENCHMARK_BASELINE") {
+            config.compare_baseline = Some(baseline);
+        }
+
+        // Override with command-line arguments
         let mut i = 1;
         while i < args.len() {
             match args[i].as_str() {
@@ -46,6 +62,10 @@ impl RunConfig {
                 }
                 "--iterations" if i + 1 < args.len() => {
                     config.iterations = args[i + 1].parse().unwrap_or(1);
+                    i += 1;
+                }
+                "--threshold" if i + 1 < args.len() => {
+                    config.regression_threshold = args[i + 1].parse().unwrap_or(5.0);
                     i += 1;
                 }
                 _ => {}
@@ -68,11 +88,24 @@ impl RunConfig {
         m.insert("lending::repay".into(), 1_000_000);
         m.insert("lending::withdraw".into(), 1_000_000);
         m.insert("lending::liquidate".into(), 1_500_000);
+        m.insert("lending::liquidate_plan_optimized".into(), 250_000);
+        m.insert(
+            "lending::liquidate_plan_optimized_scale_100".into(),
+            900_000,
+        );
+        m.insert("lending::liquidate_flash_loan_plan".into(), 350_000);
+        m.insert("lending::interest_full_recompute".into(), 600_000);
+        m.insert("lending::interest_incremental_update".into(), 220_000);
+        m.insert("lending::interest_same_block_cached".into(), 80_000);
         m.insert("lending::flash_loan".into(), 1_800_000);
         m.insert("lending::get_health_factor".into(), 400_000);
         m.insert("lending::get_user_position".into(), 400_000);
         m.insert("lending::set_oracle".into(), 300_000);
         m.insert("lending::set_pause".into(), 200_000);
+        m.insert("lending::interest_rate_model_linear".into(), 300_000);
+        m.insert("lending::interest_rate_model_kink".into(), 300_000);
+        m.insert("lending::interest_rate_model_jump".into(), 300_000);
+        m.insert("lending::interest_rate_model_exponential".into(), 300_000);
         // Hello-world (core lending) contract
         m.insert("hello_world::initialize".into(), 500_000);
         m.insert("hello_world::deposit_collateral".into(), 900_000);
@@ -103,6 +136,21 @@ impl RunConfig {
         m.insert("bridge::transfer_admin".into(), 300_000);
         m.insert("bridge::list_bridges".into(), 200_000);
         m.insert("bridge::compute_fee".into(), 100_000);
+        // Pool factory contract
+        m.insert("pool_factory::initialize".into(), 300_000);
+        m.insert("pool_factory::create_pool".into(), 800_000);
+        m.insert("pool_factory::get_pool_count".into(), 150_000);
+        m.insert("pool_factory::get_pools".into(), 500_000);
+        m.insert("pool_factory::get_pool_by_index".into(), 300_000);
+        m.insert("pool_factory::update_pool_config".into(), 700_000);
+        // Reputation system contract
+        m.insert("reputation::initialize".into(), 400_000);
+        m.insert("reputation::record_repayment".into(), 600_000);
+        m.insert("reputation::record_default".into(), 500_000);
+        m.insert("reputation::get_reputation".into(), 200_000);
+        m.insert("reputation::get_tier".into(), 250_000);
+        m.insert("reputation::get_tier_benefits".into(), 200_000);
+        m.insert("reputation::apply_decay".into(), 500_000);
         m
     }
 }
@@ -114,6 +162,7 @@ impl Default for RunConfig {
             output_file: None,
             iterations: 1,
             budgets: Self::default_budgets(),
+            regression_threshold: 5.0,
         }
     }
 }

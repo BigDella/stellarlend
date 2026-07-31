@@ -244,13 +244,13 @@ fn test_rebalancing_gas_cost_estimation() {
 fn is_emergency_stop_active(env: &Env) -> bool {
     env.storage()
         .persistent()
-        .get(&crate::reb::RebalancingDataKey::EmergencyStop)
+        .get(&crate::rebalancing::RebalancingDataKey::EmergencyStop)
         .unwrap_or(false)
 }
 
 fn is_rebalancing_paused(env: &Env) -> bool {
     env.storage()
         .persistent()
-        .get(&crate::reb::RebalancingDataKey::RebalancingPaused)
+        .get(&crate::rebalancing::RebalancingDataKey::RebalancingPaused)
         .unwrap_or(false)
 }
