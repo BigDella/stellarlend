@@ -28,7 +28,16 @@ function sanitizeObject(value: unknown): unknown {
   return value;
 }
 
+/** Paths that carry structured payloads (CSV/JSON) where stripping quotes breaks parsing. */
+function skipSanitize(path: string): boolean {
+  return path.startsWith('/api/subscriptions/import');
+}
+
 export function sanitizeInput(req: Request, _res: Response, next: NextFunction): void {
+  if (skipSanitize(req.path)) {
+    return next();
+  }
+
   req.body = sanitizeObject(req.body) as Request['body'];
   req.query = sanitizeObject(req.query) as Request['query'];
   req.params = sanitizeObject(req.params) as Request['params'];

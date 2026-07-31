@@ -10,11 +10,25 @@ export enum ErrorCode {
   INTERNAL_SERVER_ERROR = 'INTERNAL_SERVER_ERROR',
 }
 
+/**
+ * Standard error response format
+ */
+export interface ErrorResponse {
+  success: false;
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+  requestId?: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public statusCode: number,
     public message: string,
     public code: ErrorCode,
+    public details?: unknown,
     public isOperational = true
   ) {
     super(message);

@@ -1,0 +1,20 @@
+[package]
+name = "liquidation-auction"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+lending-types = { path = "../lending-types" }
+auction-types = { path = "../auction-types" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[[example]]
+name = "deploy"
+path = "examples/deploy.rs"
+crate-type = ["bin"]

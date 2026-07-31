@@ -58,7 +58,10 @@ fn test_isolated_pool_borrow_within_own_collateral() {
 
     // Borrow 700 (≤ 1000 * 8000/10000 = 800 max)
     let result = client.try_cross_asset_borrow(&user, &Some(token_a.clone()), &700);
-    assert!(result.is_ok(), "borrow within isolated pool limit should succeed");
+    assert!(
+        result.is_ok(),
+        "borrow within isolated pool limit should succeed"
+    );
 }
 
 #[test]
@@ -79,7 +82,10 @@ fn test_isolated_pool_borrow_exceeds_own_collateral() {
 
     // Try borrow 200 — exceeds 100 * 8000/10000 = 80 max
     let result = client.try_cross_asset_borrow(&user, &Some(token_a.clone()), &200);
-    assert!(result.is_err(), "borrow exceeding isolated pool collateral should fail");
+    assert!(
+        result.is_err(),
+        "borrow exceeding isolated pool collateral should fail"
+    );
 }
 
 #[test]
@@ -96,11 +102,9 @@ fn test_freeze_pool_blocks_new_deposits() {
     );
 
     // Deposit works before freeze
-    assert!(
-        client
-            .try_cross_asset_deposit(&user, &Some(token.clone()), &500)
-            .is_ok()
-    );
+    assert!(client
+        .try_cross_asset_deposit(&user, &Some(token.clone()), &500)
+        .is_ok());
 
     // Admin freezes pool
     client.freeze_pool(&admin, &Some(token.clone()), &true);

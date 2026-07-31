@@ -45,9 +45,7 @@ describe('Subscription import/export routes', () => {
       }),
     ]);
 
-    const importResponse = await request(app)
-      .post('/api/subscriptions/import')
-      .send(csvPayload);
+    const importResponse = await request(app).post('/api/subscriptions/import').send(csvPayload);
 
     expect(importResponse.status).toBe(200);
     expect(importResponse.body.success).toBe(true);
@@ -142,15 +140,13 @@ describe('Subscription import/export routes', () => {
   });
 
   it('rejects malformed JSON import strings during preview', async () => {
-    const response = await request(app)
-      .post('/api/subscriptions/import/preview')
-      .send({
-        merchantId: 'merchant_42',
-        format: 'json',
-        data: '[{"subscriptionId":"sub_1"}',
-      });
+    const response = await request(app).post('/api/subscriptions/import/preview').send({
+      merchantId: 'merchant_42',
+      format: 'json',
+      data: '[{"subscriptionId":"sub_1"}',
+    });
 
     expect(response.status).toBe(400);
-    expect(response.body.error).toBe('Invalid JSON import payload');
+    expect(response.body.error.message).toBe('Invalid JSON import payload');
   });
 });

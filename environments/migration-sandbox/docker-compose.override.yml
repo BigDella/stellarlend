@@ -1,0 +1,50 @@
+# Docker Compose override for migration sandbox environment.
+# Usage: docker-compose -f docker-compose.yml -f environments/migration-sandbox/docker-compose.override.yml up
+version: "3.8"
+
+services:
+  migration-sandbox:
+    image: stellar/quickstart:latest
+    container_name: stellarlend-migration-sandbox
+    ports:
+      - "8000:8000"
+    environment:
+      - NETWORK=local
+      - LIMITS=testnet
+      - ENABLE_SOROBAN_RPC=true
+    volumes:
+      - migration-sandbox-data:/opt/stellar
+      - ./.migration-sandbox/snapshots:/snapshots:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - migration-net
+
+  migration-simulator:
+    image: node:20-slim
+    container_name: stellarlend-migration-simulator
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - STELLAR_NETWORK=local
+      - STELLAR_RPC_URL=http://migration-sandbox:8000/soroban/rpc
+      - STELLAR_HORIZON_URL=http://migration-sandbox:8000
+      - MIGRATION_SANDBOX_MODE=true
+    depends_on:
+      migration-sandbox:
+        condition: service_healthy
+    networks:
+      - migration-net
+    profiles:
+      - simulator
+
+volumes:
+  migration-sandbox-data:
+
+networks:
+  migration-net:
+    driver: bridge

@@ -1,8 +1,4 @@
-import {
-  exportSubscriptions,
-  importSubscriptions,
-  validateImport,
-} from '../utils/importExport';
+import { exportSubscriptions, importSubscriptions, validateImport } from '../utils/importExport';
 import { ImportData, SubscriptionRecord } from '../types';
 
 const EXISTING_SUBSCRIPTION: SubscriptionRecord = {
@@ -153,7 +149,9 @@ describe('importExport utilities', () => {
 
     expect(result.updatedCount).toBe(1);
     expect(result.skippedCount).toBe(1);
-    expect(result.appliedSubscriptions.find((item) => item.subscriptionId === 'sub_existing')?.amount).toBe(30);
+    expect(
+      result.appliedSubscriptions.find((item) => item.subscriptionId === 'sub_existing')?.amount
+    ).toBe(30);
   });
 
   it('exports deterministic JSON subscription data', () => {

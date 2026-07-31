@@ -5,15 +5,15 @@
  * using weighted median calculation.
  */
 
-import type { RawPriceData, PriceData, AggregatedPrice } from '../types/index.js';
-import { BasePriceProvider } from '../providers/base-provider.js';
-import { PriceValidator } from './price-validator.js';
-import { PriceCache } from './cache.js';
-import { PriceHistoryService } from './price-history.js';
-import { CircuitBreaker, CircuitState, createCircuitBreaker } from './circuit-breaker.js';
-import type { CircuitBreakerConfig, CircuitBreakerMetrics } from './circuit-breaker.js';
-import { scalePrice } from '../config.js';
-import { logger } from '../utils/logger.js';
+import type { RawPriceData, PriceData, AggregatedPrice } from '@/types';
+import { BasePriceProvider } from '@/providers/base-provider';
+import { PriceValidator } from './price-validator';
+import { PriceCache } from './cache';
+import { PriceHistoryService } from './price-history';
+import { CircuitBreaker, CircuitState, createCircuitBreaker } from './circuit-breaker';
+import type { CircuitBreakerConfig, CircuitBreakerMetrics } from './circuit-breaker';
+import { scalePrice } from '@/config';
+import { logger } from '@/utils/logger';
 
 /**
  * Aggregator configuration
@@ -21,6 +21,23 @@ import { logger } from '../utils/logger.js';
 export interface AggregatorConfig {
   minSources: number;
   useWeightedMedian: boolean;
+  /**
+   * Enable priority-based failover mode.
+   *
+   * When true, providers are tried in ascending priority order (1 = highest).
+   * The aggregator stops as soon as it collects a valid price from the
+   * highest-priority available provider and does NOT query lower-priority
+   * providers — keeping latency minimal when the primary is healthy.
+   *
+   * Lower-priority providers are only consulted when all higher-priority
+   * providers fail or have open circuit breakers.  When a previously-failed
+   * provider recovers (circuit breaker closes), it is automatically preferred
+   * again on the next request.
+   *
+   * When false (default), all enabled providers are queried and their results
+   * are aggregated via weighted median.
+   */
+  failoverMode?: boolean;
   circuitBreaker?: Partial<Omit<CircuitBreakerConfig, 'providerName'>>;
 }
 
@@ -30,6 +47,7 @@ export interface AggregatorConfig {
 const DEFAULT_CONFIG: AggregatorConfig = {
   minSources: 1,
   useWeightedMedian: true,
+  failoverMode: false,
 };
 
 /**
@@ -131,9 +149,86 @@ export class PriceAggregator {
   }
 
   /**
-   * Fetch price from providers with fallback logic
+   * Fetch price from providers with fallback logic.
+   *
+   * In **failover mode** providers are tried in priority order (lowest number
+   * first).  As soon as a valid price is obtained from the highest-available
+   * provider the method returns immediately — lower-priority providers are
+   * never queried, keeping latency minimal when the primary is healthy.
+   * If the current provider fails its circuit breaker opens and the next
+   * lower-priority provider is tried automatically.  When the failed provider
+   * recovers (circuit breaker transitions back to CLOSED) it will be preferred
+   * again on the next call.
+   *
+   * In **aggregation mode** (default) all enabled providers are queried and
+   * their results are combined via weighted median.
    */
   private async fetchWithFallback(asset: string): Promise<PriceData[]> {
+    return this.config.failoverMode
+      ? this.fetchWithPriorityFailover(asset)
+      : this.fetchFromAllProviders(asset);
+  }
+
+  /**
+   * Priority-based failover: try providers in priority order and return as
+   * soon as the highest-available provider succeeds.  Lower-priority providers
+   * are only consulted when all higher-priority ones are unavailable or fail.
+   *
+   * Recovery is automatic: once a higher-priority provider's circuit breaker
+   * closes it will be tried first again on the next request.
+   */
+  private async fetchWithPriorityFailover(asset: string): Promise<PriceData[]> {
+    // Providers are already sorted by ascending priority (1 = highest)
+    for (const provider of this.providers) {
+      const circuitBreaker = this.circuitBreakers.get(provider.name);
+
+      if (circuitBreaker && !circuitBreaker.isAllowed()) {
+        logger.warn(
+          `[failover] Circuit breaker OPEN for ${provider.name} (priority ${provider.priority}), trying next provider`
+        );
+        continue;
+      }
+
+      try {
+        const rawPrice = await provider.fetchPrice(asset);
+        const validation = this.validator.validate(rawPrice);
+
+        if (validation.isValid && validation.price) {
+          circuitBreaker?.recordSuccess();
+
+          logger.debug(
+            `[failover] Got valid price from ${provider.name} (priority ${provider.priority}) for ${asset}`,
+            { price: validation.price.price.toString() }
+          );
+
+          // Return immediately — do not query lower-priority providers
+          return [validation.price];
+        }
+
+        // Invalid price counts as a failure
+        circuitBreaker?.recordFailure();
+        logger.warn(
+          `[failover] Invalid price from ${provider.name} (priority ${provider.priority}) for ${asset}, trying next provider`,
+          { errors: validation.errors }
+        );
+      } catch (error) {
+        circuitBreaker?.recordFailure();
+        logger.warn(
+          `[failover] Provider ${provider.name} (priority ${provider.priority}) failed for ${asset}, trying next provider`,
+          { error }
+        );
+      }
+    }
+
+    logger.error(`[failover] All providers failed for ${asset}`);
+    return [];
+  }
+
+  /**
+   * Aggregation mode: query all providers and collect every valid price for
+   * weighted-median aggregation.
+   */
+  private async fetchFromAllProviders(asset: string): Promise<PriceData[]> {
     const validPrices: PriceData[] = [];
     const errors: Map<string, Error> = new Map();
 
@@ -201,10 +296,10 @@ export class PriceAggregator {
     if (prices.length === 1) {
       return {
         asset,
-        price: prices[0].price,
+        price: prices[0]!.price,
         sources: prices,
         timestamp: now,
-        confidence: prices[0].confidence,
+        confidence: prices[0]!.confidence,
       };
     }
 
@@ -248,13 +343,13 @@ export class PriceAggregator {
 
     let cumWeight = 0;
     for (let i = 0; i < sorted.length; i++) {
-      cumWeight += weights[i];
+      cumWeight += weights[i]!;
       if (cumWeight >= halfWeight) {
-        return sorted[i].price;
+        return sorted[i]!.price;
       }
     }
 
-    return sorted[sorted.length - 1].price;
+    return sorted[sorted.length - 1]!.price;
   }
 
   /**
@@ -266,11 +361,11 @@ export class PriceAggregator {
     const mid = Math.floor(sorted.length / 2);
 
     if (sorted.length % 2 === 0) {
-      const avg = (sorted[mid - 1].price + sorted[mid].price) / 2n;
+      const avg = (sorted[mid - 1]!.price + sorted[mid]!.price) / 2n;
       return avg;
     }
 
-    return sorted[mid].price;
+    return sorted[mid]!.price;
   }
 
   /**
@@ -303,11 +398,19 @@ export class PriceAggregator {
   }
 
   /**
+   * Returns true when the aggregator is running in priority-based failover mode.
+   */
+  isFailoverMode(): boolean {
+    return this.config.failoverMode ?? false;
+  }
+
+  /**
    * Get aggregator statistics
    */
   getStats() {
     return {
       enabledProviders: this.providers.length,
+      failoverMode: this.isFailoverMode(),
       cacheStats: this.cache.getStats(),
       priceHistoryStats: this.priceHistory.getStats(),
       circuitBreakerMetrics: this.getCircuitBreakerMetrics(),
@@ -321,7 +424,12 @@ function isAggregatorConfig(value: unknown): value is Partial<AggregatorConfig> 
     return false;
   }
 
-  return 'minSources' in value || 'useWeightedMedian' in value || 'circuitBreaker' in value;
+  return (
+    'minSources' in value ||
+    'useWeightedMedian' in value ||
+    'failoverMode' in value ||
+    'circuitBreaker' in value
+  );
 }
 
 function isPriceHistoryService(value: unknown): value is PriceHistoryService {

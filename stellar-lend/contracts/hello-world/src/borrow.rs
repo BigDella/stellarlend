@@ -127,12 +127,9 @@ fn accrue_interest(env: &Env, user: &Address, position: &mut Position) -> Result
         .unwrap_or(current_index); // Default: user borrowed at current index (no prior debt).
 
     // Compound interest = principal * (current_index - user_index) / user_index
-    let new_interest = crate::interest_rate::compute_index_interest(
-        position.debt,
-        user_index,
-        current_index,
-    )
-    .map_err(|_| BorrowError::Overflow)?;
+    let new_interest =
+        crate::interest_rate::compute_index_interest(position.debt, user_index, current_index)
+            .map_err(|_| BorrowError::Overflow)?;
 
     position.borrow_interest = position
         .borrow_interest

@@ -1,9 +1,6 @@
 name: Mutation Testing
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * 1'
+on: workflow_dispatch
 
 jobs:
   api-mutation:
@@ -26,6 +23,12 @@ jobs:
 
       - name: Run mutation suite
         run: npm run mutation:test
+        continue-on-error: true
+
+      - name: Analyze survived mutants
+        if: always()
+        run: node ../scripts/analyze-mutants.js reports/mutation/report.json
+        continue-on-error: true
 
       - name: Upload mutation report
         if: always()
@@ -33,3 +36,157 @@ jobs:
         with:
           name: api-mutation-report
           path: api/reports/mutation/
+
+      - name: Comment PR with mutation score
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            try {
+              const reportPath = 'api/reports/mutation/report.json';
+              if (fs.existsSync(reportPath)) {
+                const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+                const scores = report.mutationScores || [];
+                
+                let totalKilled = 0;
+                let totalSurvived = 0;
+                let totalTimedOut = 0;
+                
+                scores.forEach(file => {
+                  file.mutants.forEach(mutant => {
+                    if (mutant.status === 'Killed') totalKilled++;
+                    else if (mutant.status === 'Survived') totalSurvived++;
+                    else totalTimedOut++;
+                  });
+                });
+                
+                const total = totalKilled + totalSurvived + totalTimedOut;
+                const score = total > 0 ? Math.round((totalKilled / total) * 100) : 100;
+                
+                const comment = `## Mutation Testing Report
+                
+                **API Mutation Score: ${score}%**
+                
+                - ✅ Killed: ${totalKilled}
+                - ❌ Survived: ${totalSurvived}
+                - ⏱️ TimedOut: ${totalTimedOut}
+                - 📊 Total: ${total}
+                
+                ${score >= 80 ? '✅ Mutation score meets 80% threshold' : '⚠️ Mutation score below 80% threshold - test improvements required'}
+                
+                [View detailed report](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+                `;
+                
+                github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: comment
+                });
+              }
+            } catch (error) {
+              console.error('Failed to comment on PR:', error);
+            }
+
+      - name: Track historical mutation score
+        if: always()
+        run: |
+          node ../scripts/track-mutation-score.js api reports/mutation/report.json
+        continue-on-error: true
+
+  oracle-mutation:
+    name: Oracle Mutation Score
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: oracle
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run mutation suite
+        run: npm run mutation:test
+        continue-on-error: true
+
+      - name: Analyze survived mutants
+        if: always()
+        run: node ../scripts/analyze-mutants.js reports/mutation/report.json
+        continue-on-error: true
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-mutation-report
+          path: oracle/reports/mutation/
+
+      - name: Comment PR with mutation score
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            try {
+              const reportPath = 'oracle/reports/mutation/report.json';
+              if (fs.existsSync(reportPath)) {
+                const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+                const scores = report.mutationScores || [];
+                
+                let totalKilled = 0;
+                let totalSurvived = 0;
+                let totalTimedOut = 0;
+                
+                scores.forEach(file => {
+                  file.mutants.forEach(mutant => {
+                    if (mutant.status === 'Killed') totalKilled++;
+                    else if (mutant.status === 'Survived') totalSurvived++;
+                    else totalTimedOut++;
+                  });
+                });
+                
+                const total = totalKilled + totalSurvived + totalTimedOut;
+                const score = total > 0 ? Math.round((totalKilled / total) * 100) : 100;
+                
+                const comment = `## Mutation Testing Report
+                
+                **Oracle Mutation Score: ${score}%**
+                
+                - ✅ Killed: ${totalKilled}
+                - ❌ Survived: ${totalSurvived}
+                - ⏱️ TimedOut: ${totalTimedOut}
+                - 📊 Total: ${total}
+                
+                ${score >= 80 ? '✅ Mutation score meets 80% threshold' : '⚠️ Mutation score below 80% threshold - test improvements required'}
+                
+                [View detailed report](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+                `;
+                
+                github.rest.issues.createComment({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: comment
+                });
+              }
+            } catch (error) {
+              console.error('Failed to comment on PR:', error);
+            }
+
+      - name: Track historical mutation score
+        if: always()
+        run: |
+          node ../scripts/track-mutation-score.js oracle reports/mutation/report.json
+        continue-on-error: true

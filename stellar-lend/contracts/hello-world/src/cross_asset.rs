@@ -18,7 +18,9 @@
 //! - Prices must not be stale (> 1 hour old) for position calculations.
 
 #![allow(dead_code)]
-use soroban_sdk::{contractevent, contracterror, contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
+use soroban_sdk::{
+    contracterror, contractevent, contracttype, symbol_short, Address, Env, Map, Symbol, Vec,
+};
 
 // -------------------------------------------------------------------------
 // Events for cap changes and pool state changes
@@ -153,10 +155,10 @@ pub enum CrossAssetError {
 const ADMIN: Symbol = symbol_short!("admin");
 
 /// Storage key for the map of asset configurations: Map<AssetKey, AssetConfig>
-const ASSET_CONFIGS: Symbol = symbol_short!("configs");
+pub(crate) const ASSET_CONFIGS: Symbol = symbol_short!("configs");
 
 /// Storage key for the map of user positions: Map<UserAssetKey, AssetPosition>
-const USER_POSITIONS: Symbol = symbol_short!("positions");
+pub(crate) const USER_POSITIONS: Symbol = symbol_short!("positions");
 
 /// Storage key for the map of total supplies per asset: Map<AssetKey, i128>
 const TOTAL_SUPPLIES: Symbol = symbol_short!("supplies");
@@ -165,7 +167,7 @@ const TOTAL_SUPPLIES: Symbol = symbol_short!("supplies");
 const TOTAL_BORROWS: Symbol = symbol_short!("borrows");
 
 /// Storage key for the global list of registered assets: Vec<AssetKey>
-const ASSET_LIST: Symbol = symbol_short!("assets");
+pub(crate) const ASSET_LIST: Symbol = symbol_short!("assets");
 
 /// Initialize the cross-asset lending module.
 ///
@@ -455,84 +457,7 @@ pub fn get_user_position_summary(
     env: &Env,
     user: &Address,
 ) -> Result<UserPositionSummary, CrossAssetError> {
-    let asset_list: Vec<AssetKey> = env
-        .storage()
-        .persistent()
-        .get(&ASSET_LIST)
-        .unwrap_or(Vec::new(env));
-
-    let configs: Map<AssetKey, AssetConfig> = env
-        .storage()
-        .persistent()
-        .get(&ASSET_CONFIGS)
-        .unwrap_or(Map::new(env));
-
-    let mut total_collateral_value: i128 = 0;
-    let mut weighted_collateral_value: i128 = 0;
-    let mut total_debt_value: i128 = 0;
-    let mut weighted_debt_value: i128 = 0;
-
-    for i in 0..asset_list.len() {
-        let asset_key = asset_list.get(i).unwrap();
-
-        if let Some(config) = configs.get(asset_key.clone()) {
-            let asset_option = asset_key.to_option();
-            let position = get_user_asset_position(env, user, asset_option);
-
-            if position.collateral == 0 && position.debt_principal == 0 {
-                continue;
-            }
-
-            let current_time = env.ledger().timestamp();
-            if current_time > config.price_updated_at
-                && current_time - config.price_updated_at > 3600
-            {
-                return Err(CrossAssetError::PriceStale);
-            }
-
-            let collateral_value = (position.collateral * config.price) / 10_000_000;
-            total_collateral_value += collateral_value;
-
-            if config.can_collateralize {
-                weighted_collateral_value +=
-                    (collateral_value * config.liquidation_threshold) / 10_000;
-            }
-
-            let total_debt = position.debt_principal + position.accrued_interest;
-            let debt_value = (total_debt * config.price) / 10_000_000;
-            total_debt_value += debt_value;
-
-            weighted_debt_value += debt_value;
-        }
-    }
-
-    // Calculate health factor (weighted_collateral / weighted_debt * 10000)
-    // Health factor of 1.0 = 10000, below 1.0 can be liquidated
-    let health_factor = if weighted_debt_value > 0 {
-        (weighted_collateral_value * 10_000) / weighted_debt_value
-    } else {
-        i128::MAX // No debt = infinite health
-    };
-
-    // Position is liquidatable if health factor < 1.0 (10000)
-    let is_liquidatable = health_factor < 10_000 && weighted_debt_value > 0;
-
-    // Calculate remaining borrow capacity
-    let borrow_capacity = if weighted_collateral_value > weighted_debt_value {
-        weighted_collateral_value - weighted_debt_value
-    } else {
-        0
-    };
-
-    Ok(UserPositionSummary {
-        total_collateral_value,
-        weighted_collateral_value,
-        total_debt_value,
-        weighted_debt_value,
-        health_factor,
-        is_liquidatable,
-        borrow_capacity,
-    })
+    crate::health::get_batched_user_position_summary(env, user)
 }
 
 /// Deposit collateral for a specific asset.
@@ -581,6 +506,9 @@ pub fn cross_asset_deposit(
         }
     }
 
+    // Per-user supply limit check
+    check_per_user_supply_limit(env, &user, &asset_key, amount)?;
+
     let mut position = get_user_asset_position(env, &user, asset.clone());
 
     position.collateral += amount;
@@ -588,6 +516,94 @@ pub fn cross_asset_deposit(
 
     set_user_asset_position(env, &user, asset, position.clone());
     update_total_supply(env, &asset_key, amount);
+    update_per_user_supply(env, &user, &asset_key, amount);
+
+    Ok(position)
+}
+
+/// Borrow a specific asset against cross-asset collateral.
+///
+/// Requires user authorization. Validates the asset is enabled for borrowing,
+/// checks the borrow cap, and verifies the post-borrow health factor stays
+/// above 1.0. If the health check fails, the borrow is rolled back.
+///
+/// # Arguments
+/// * `env` - The contract environment
+/// * `user` - User borrowing (must authorize)
+/// * `asset` - Asset to borrow (`None` for XLM)
+/// * `amount` - Amount to borrow
+///
+/// # Returns
+/// Updated [`AssetPosition`] after the borrow.
+///
+/// # Errors
+/// * `AssetNotConfigured` - Asset is not registered
+/// * `AssetDisabled` - Asset is not enabled for borrowing
+/// * `BorrowCapExceeded` - Borrow would exceed the asset's borrow cap
+/// * `ExceedsBorrowCapacity` - Health factor would drop below 1.0
+/// * `PriceStale` - Stale price prevents health factor calculation
+pub fn cross_asset_borrow(
+    env: &Env,
+    user: Address,
+    asset: Option<Address>,
+    amount: i128,
+) -> Result<AssetPosition, CrossAssetError> {
+    user.require_auth();
+
+    let asset_key = AssetKey::from_option(asset.clone());
+    let config = get_asset_config(env, &asset_key)?;
+
+    // Reject borrows from a frozen pool.
+    if config.is_frozen {
+        return Err(CrossAssetError::AssetDisabled);
+    }
+
+    if !config.can_borrow {
+        return Err(CrossAssetError::AssetDisabled);
+    }
+
+    // Borrow-cap enforcement with dynamic liquidity-based adjustment.
+    let effective_borrow_cap = calculate_dynamic_borrow_cap(env, asset.clone())?;
+    if effective_borrow_cap > 0 {
+        let total_borrow = get_total_borrow(env, &asset_key);
+        if total_borrow + amount > effective_borrow_cap {
+            return Err(CrossAssetError::BorrowCapExceeded);
+        }
+    }
+
+    let mut position = get_user_asset_position(env, &user, asset.clone());
+
+    position.debt_principal += amount;
+    position.last_updated = env.ledger().timestamp();
+
+    set_user_asset_position(env, &user, asset.clone(), position.clone());
+
+    if config.is_isolated {
+        // Isolated pool: only collateral deposited in THIS pool may back its debt.
+        let pool_collateral = position.collateral;
+        let pool_debt = position.debt_principal + position.accrued_interest;
+        let max_pool_debt = pool_collateral
+            .checked_mul(config.collateral_factor)
+            .unwrap_or(0)
+            .checked_div(10_000)
+            .unwrap_or(0);
+
+        if pool_debt > max_pool_debt {
+            position.debt_principal -= amount;
+            set_user_asset_position(env, &user, asset, position);
+            return Err(CrossAssetError::ExceedsBorrowCapacity);
+        }
+    } else {
+        // Non-isolated: use cross-pool health factor as before.
+        let summary = get_user_position_summary(env, &user)?;
+        if summary.health_factor < 10_000 {
+            position.debt_principal -= amount;
+            set_user_asset_position(env, &user, asset, position);
+            return Err(CrossAssetError::ExceedsBorrowCapacity);
+        }
+    }
+
+    update_total_borrow(env, &asset_key, amount);
 
     Ok(position)
 }
@@ -645,90 +661,95 @@ pub fn cross_asset_withdraw(
     Ok(position)
 }
 
-/// Borrow a specific asset against cross-asset collateral.
+/// Liquidate an unhealthy cross-asset position.
 ///
-/// Requires user authorization. Validates the asset is enabled for borrowing,
-/// checks the borrow cap, and verifies the post-borrow health factor stays
-/// above 1.0. If the health check fails, the borrow is rolled back.
+/// Liquidators can repay debt in exchange for collateral at a discount.
+/// This function handles multi-asset liquidation where the liquidator can choose
+/// which collateral asset to receive.
 ///
 /// # Arguments
 /// * `env` - The contract environment
-/// * `user` - User borrowing (must authorize)
-/// * `asset` - Asset to borrow (`None` for XLM)
-/// * `amount` - Amount to borrow
+/// * `liquidator` - Address performing the liquidation
+/// * `user` - Address of the user being liquidated
+/// * `debt_asset` - Asset to repay (None for XLM)
+/// * `collateral_asset` - Asset to receive as collateral (None for XLM)
+/// * `debt_to_repay` - Amount of debt to repay
+/// * `collateral_to_receive` - Expected amount of collateral to receive
 ///
 /// # Returns
-/// Updated [`AssetPosition`] after the borrow.
+/// Amount of collateral actually transferred to liquidator.
 ///
 /// # Errors
-/// * `AssetNotConfigured` - Asset is not registered
-/// * `AssetDisabled` - Asset is not enabled for borrowing
-/// * `BorrowCapExceeded` - Borrow would exceed the asset's borrow cap
-/// * `ExceedsBorrowCapacity` - Health factor would drop below 1.0
-/// * `PriceStale` - Stale price prevents health factor calculation
-pub fn cross_asset_borrow(
+/// * `AssetNotConfigured` - Either asset is not registered
+/// * `AssetDisabled` - Assets are disabled for liquidation
+/// * `InsufficientCollateral` - User position is not liquidatable
+/// * `InvalidPrice` - Price data is invalid
+/// * `PriceStale` - Price data is stale
+/// * `NotAuthorized` - Liquidator is not authorized
+pub fn cross_asset_liquidate(
     env: &Env,
+    liquidator: Address,
     user: Address,
-    asset: Option<Address>,
-    amount: i128,
-) -> Result<AssetPosition, CrossAssetError> {
-    user.require_auth();
+    debt_asset: Option<Address>,
+    collateral_asset: Option<Address>,
+    debt_to_repay: i128,
+    collateral_to_receive: i128,
+) -> Result<i128, CrossAssetError> {
+    liquidator.require_auth();
 
-    let asset_key = AssetKey::from_option(asset.clone());
-    let config = get_asset_config(env, &asset_key)?;
+    // Get asset configurations
+    let debt_asset_key = AssetKey::from_option(debt_asset.clone());
+    let collateral_asset_key = AssetKey::from_option(collateral_asset.clone());
+    
+    let debt_config = get_asset_config(env, &debt_asset_key)?;
+    let collateral_config = get_asset_config(env, &collateral_asset_key)?;
 
-    // Reject borrows from a frozen pool.
-    if config.is_frozen {
-        return Err(CrossAssetError::AssetDisabled);
+    // Check if position is liquidatable
+    let position_summary = get_user_position_summary(env, &user)?;
+    if !position_summary.is_liquidatable {
+        return Err(CrossAssetError::InsufficientCollateral);
     }
 
-    if !config.can_borrow {
-        return Err(CrossAssetError::AssetDisabled);
+    // Get user positions for both assets
+    let mut debt_position = get_user_asset_position(env, &user, debt_asset.clone());
+    let mut collateral_position = get_user_asset_position(env, &user, collateral_asset.clone());
+
+    // Validate liquidation amounts
+    if debt_to_repay <= 0 || collateral_to_receive <= 0 {
+        return Err(CrossAssetError::InsufficientCollateral);
     }
 
-    // Borrow-cap enforcement.
-    if config.max_borrow > 0 {
-        let total_borrow = get_total_borrow(env, &asset_key);
-        if total_borrow + amount > config.max_borrow {
-            return Err(CrossAssetError::BorrowCapExceeded);
-        }
+    // Calculate actual collateral to receive with liquidation incentive
+    let liquidation_incentive = collateral_config.liquidation_threshold - collateral_config.collateral_factor;
+    let actual_collateral = (collateral_to_receive * (10_000 - liquidation_incentive)) / 10_000;
+
+    // Ensure user has enough collateral
+    if collateral_position.collateral < actual_collateral {
+        return Err(CrossAssetError::InsufficientCollateral);
     }
 
-    let mut position = get_user_asset_position(env, &user, asset.clone());
-
-    position.debt_principal += amount;
-    position.last_updated = env.ledger().timestamp();
-
-    set_user_asset_position(env, &user, asset.clone(), position.clone());
-
-    if config.is_isolated {
-        // Isolated pool: only collateral deposited in THIS pool may back its debt.
-        let pool_collateral = position.collateral;
-        let pool_debt = position.debt_principal + position.accrued_interest;
-        let max_pool_debt = pool_collateral
-            .checked_mul(config.collateral_factor)
-            .unwrap_or(0)
-            .checked_div(10_000)
-            .unwrap_or(0);
-
-        if pool_debt > max_pool_debt {
-            position.debt_principal -= amount;
-            set_user_asset_position(env, &user, asset, position);
-            return Err(CrossAssetError::ExceedsBorrowCapacity);
-        }
-    } else {
-        // Non-isolated: use cross-pool health factor as before.
-        let summary = get_user_position_summary(env, &user)?;
-        if summary.health_factor < 10_000 {
-            position.debt_principal -= amount;
-            set_user_asset_position(env, &user, asset, position);
-            return Err(CrossAssetError::ExceedsBorrowCapacity);
-        }
+    // Ensure user has enough debt to repay
+    let total_debt = debt_position.debt_principal + debt_position.accrued_interest;
+    if debt_to_repay > total_debt {
+        return Err(CrossAssetError::InsufficientCollateral);
     }
 
-    update_total_borrow(env, &asset_key, amount);
+    // Update positions
+    debt_position.debt_principal -= debt_to_repay;
+    debt_position.last_updated = env.ledger().timestamp();
+    
+    collateral_position.collateral -= actual_collateral;
+    collateral_position.last_updated = env.ledger().timestamp();
 
-    Ok(position)
+    // Store updated positions
+    set_user_asset_position(env, &user, debt_asset, debt_position);
+    set_user_asset_position(env, &user, collateral_asset, collateral_position);
+
+    // Update total supplies
+    update_total_borrow(env, &debt_asset_key, -debt_to_repay);
+    update_total_supply(env, &collateral_asset_key, -actual_collateral);
+
+    Ok(actual_collateral)
 }
 
 /// Repay debt for a specific asset.
@@ -846,6 +867,231 @@ pub fn get_borrow_utilization(
     let config = get_asset_config(env, &asset_key)?;
     let current_borrows = get_total_borrow(env, &asset_key);
     Ok((current_borrows, config.max_borrow))
+}
+
+/// Per-user supply cap storage key suffix
+const PER_USER_SUPPLY_KEY: Symbol = symbol_short!("per_user");
+
+/// Dynamic cap adjustment based on utilization.
+///
+/// Calculates a suggested supply cap based on the current utilization rate.
+/// When utilization is above the target threshold, caps are tightened;
+/// when below, caps are relaxed.
+pub fn calculate_dynamic_supply_cap(
+    env: &Env,
+    asset: Option<Address>,
+) -> Result<i128, CrossAssetError> {
+    let asset_key = AssetKey::from_option(asset);
+    let config = get_asset_config(env, &asset_key)?;
+    let current_supply = get_total_supply(env, &asset_key);
+    let current_borrow = get_total_borrow(env, &asset_key);
+
+    // Target utilization: 75% (7500 bps)
+    let target_util_bps: i128 = 7500;
+
+    // If no supply or borrow, use configured cap directly
+    if current_supply == 0 || current_borrow == 0 {
+        return Ok(config.max_supply);
+    }
+
+    // Current utilization in basis points
+    let current_util_bps = (current_borrow * 10_000) / current_supply;
+
+    // If utilization exceeds target, suggest a tighter cap
+    if current_util_bps > target_util_bps {
+        let overage_bps = current_util_bps - target_util_bps;
+        // Reduce effective cap proportionally to overage (max 50% reduction)
+        let reduction_bps = (overage_bps * 5000) / 10000;
+        let reduction = (config.max_supply * reduction_bps) / 10_000;
+        let dynamic_cap = (config.max_supply - reduction).max(current_supply);
+        Ok(dynamic_cap)
+    } else {
+        // Below target: allow full cap
+        Ok(config.max_supply)
+    }
+}
+
+/// Calculate dynamic borrow cap based on pool liquidity.
+///
+/// The borrow cap is a function of available liquidity and utilization.
+pub fn calculate_dynamic_borrow_cap(
+    env: &Env,
+    asset: Option<Address>,
+) -> Result<i128, CrossAssetError> {
+    let asset_key = AssetKey::from_option(asset);
+    let config = get_asset_config(env, &asset_key)?;
+    let current_supply = get_total_supply(env, &asset_key);
+    let current_borrow = get_total_borrow(env, &asset_key);
+
+    if config.max_borrow == 0 {
+        return Ok(0); // unlimited
+    }
+
+    // Available liquidity = total_supply - total_borrow
+    let available_liquidity = current_supply - current_borrow;
+    if available_liquidity <= 0 {
+        // Pool is fully utilized; restrict new borrows
+        return Ok(current_borrow);
+    }
+
+    // Dynamic cap = base_cap * (available_liquidity / total_supply) adjustment
+    // Prevents borrowing more than a fraction of available liquidity
+    let liquidity_ratio_bps = (available_liquidity * 10_000) / current_supply.max(1);
+    let adjusted_cap = current_borrow + (available_liquidity * liquidity_ratio_bps) / 10_000;
+    Ok(adjusted_cap.min(config.max_borrow))
+}
+
+/// Check and enforce per-user supply limit.
+///
+/// When a per-user max is configured, this validates that the user's deposit
+/// does not exceed their individual cap.
+pub fn check_per_user_supply_limit(
+    env: &Env,
+    user: &Address,
+    asset: &AssetKey,
+    amount: i128,
+) -> Result<(), CrossAssetError> {
+    let user_supply_key = (PER_USER_SUPPLY_KEY, user.clone(), asset.clone());
+    let user_supply: i128 = env.storage().persistent().get(&user_supply_key).unwrap_or(0);
+
+    // Per-user cap is 20% of global supply cap by default
+    let config = get_asset_config(env, asset)?;
+    let per_user_cap = if config.max_supply > 0 {
+        (config.max_supply * 2000) / 10_000 // 20% of global cap
+    } else {
+        i128::MAX // No global cap => no per-user cap
+    };
+
+    if user_supply + amount > per_user_cap {
+        return Err(CrossAssetError::SupplyCapExceeded);
+    }
+    Ok(())
+}
+
+/// Update per-user supply tracking.
+pub fn update_per_user_supply(
+    env: &Env,
+    user: &Address,
+    asset: &AssetKey,
+    delta: i128,
+) {
+    let user_supply_key = (PER_USER_SUPPLY_KEY, user.clone(), asset.clone());
+    let current: i128 = env.storage().persistent().get(&user_supply_key).unwrap_or(0);
+    env.storage().persistent().set(&user_supply_key, &(current + delta));
+}
+
+// -------------------------------------------------------------------------
+// Pool Registry
+// -------------------------------------------------------------------------
+
+/// Pool metadata for the registry
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PoolInfo {
+    pub asset: Option<Address>,
+    pub is_isolated: bool,
+    pub is_frozen: bool,
+    pub total_supply: i128,
+    pub total_borrow: i128,
+    pub supply_cap: i128,
+    pub borrow_cap: i128,
+    pub collateral_factor: i128,
+    pub liquidation_threshold: i128,
+    pub utilization_bps: i128,
+}
+
+/// Get a summary of all registered pools with their current status.
+pub fn get_pool_registry(env: &Env) -> Vec<PoolInfo> {
+    let asset_list = get_asset_list(env);
+    let mut registry = Vec::new(env);
+
+    for asset_key in asset_list.iter() {
+        if let Ok(config) = get_asset_config(env, &asset_key) {
+            let asset_option = asset_key.to_option();
+            let total_supply = get_total_supply(env, &asset_key);
+            let total_borrow = get_total_borrow(env, &asset_key);
+            let utilization_bps = if total_supply > 0 {
+                (total_borrow * 10_000) / total_supply
+            } else {
+                0
+            };
+
+            registry.push_back(PoolInfo {
+                asset: asset_option,
+                is_isolated: config.is_isolated,
+                is_frozen: config.is_frozen,
+                total_supply,
+                total_borrow,
+                supply_cap: config.max_supply,
+                borrow_cap: config.max_borrow,
+                collateral_factor: config.collateral_factor,
+                liquidation_threshold: config.liquidation_threshold,
+                utilization_bps,
+            });
+        }
+    }
+
+    registry
+}
+
+/// Get detailed pool info for a single asset.
+pub fn get_pool_info(env: &Env, asset: Option<Address>) -> Result<PoolInfo, CrossAssetError> {
+    let asset_key = AssetKey::from_option(asset.clone());
+    let config = get_asset_config(env, &asset_key)?;
+    let total_supply = get_total_supply(env, &asset_key);
+    let total_borrow = get_total_borrow(env, &asset_key);
+    let utilization_bps = if total_supply > 0 {
+        (total_borrow * 10_000) / total_supply
+    } else {
+        0
+    };
+
+    Ok(PoolInfo {
+        asset,
+        is_isolated: config.is_isolated,
+        is_frozen: config.is_frozen,
+        total_supply,
+        total_borrow,
+        supply_cap: config.max_supply,
+        borrow_cap: config.max_borrow,
+        collateral_factor: config.collateral_factor,
+        liquidation_threshold: config.liquidation_threshold,
+        utilization_bps,
+    })
+}
+
+/// Create a new isolated pool with default risk parameters.
+///
+/// This is a convenience factory that sets up a pool with isolated=true
+/// and sensible defaults for the risk parameters.
+pub fn create_isolated_pool(
+    env: &Env,
+    admin: Address,
+    asset: Option<Address>,
+    collateral_factor: i128,
+    liquidation_threshold: i128,
+    supply_cap: i128,
+    borrow_cap: i128,
+) -> Result<(), CrossAssetError> {
+    require_admin(env)?;
+
+    let config = AssetConfig {
+        asset: asset.clone(),
+        collateral_factor,
+        liquidation_threshold,
+        reserve_factor: 1000, // 10% default
+        max_supply: supply_cap,
+        max_borrow: borrow_cap,
+        can_collateralize: true,
+        can_borrow: true,
+        price: 1_0000000,
+        price_updated_at: env.ledger().timestamp(),
+        is_isolated: true,
+        is_frozen: false,
+    };
+
+    require_valid_config(&config)?;
+    initialize_asset(env, asset, config)
 }
 
 // -------------------------------------------------------------------------

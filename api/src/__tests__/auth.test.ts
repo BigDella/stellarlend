@@ -10,6 +10,9 @@ jest.mock('../config', () => ({
       jwtSecret: 'test-secret-key-for-testing',
       jwtExpiresIn: '1h',
     },
+    logging: {
+      level: 'silent',
+    },
   },
 }));
 

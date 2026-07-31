@@ -42,6 +42,7 @@
 use soroban_sdk::{contracterror, contracttype, Address, Env, Symbol};
 
 use crate::deposit::DepositDataKey;
+use crate::reserve_factor;
 
 /// Maximum allowed reserve factor (50% = 5000 basis points)
 /// This ensures that at least 50% of interest always goes to lenders
@@ -98,6 +99,9 @@ pub enum ReserveDataKey {
     /// Virtual LP token balance tracked per asset for AMM deployments.
     /// (Accounting only; actual LP token custody is managed by the AMM contract / ops layer.)
     ReserveAmmLpBalance(Option<Address>),
+    /// Dynamic reserve factor curve per asset.
+    /// Value type: ReserveFactorCurve
+    ReserveFactorCurve(Option<Address>),
 }
 
 /// Initialize reserve configuration for an asset
@@ -205,6 +209,11 @@ pub fn set_reserve_factor(
 /// # Returns
 /// Reserve factor in basis points (0-5000)
 pub fn get_reserve_factor(env: &Env, asset: Option<Address>) -> i128 {
+    reserve_factor::get_dynamic_reserve_factor(env, asset.clone())
+        .unwrap_or_else(|_| get_static_reserve_factor(env, asset))
+}
+
+pub fn get_static_reserve_factor(env: &Env, asset: Option<Address>) -> i128 {
     let factor_key = ReserveDataKey::ReserveFactor(asset);
     env.storage()
         .persistent()
@@ -225,9 +234,10 @@ pub fn set_reserve_amm_target(
     caller.require_auth();
     require_admin(env, &caller)?;
 
-    env.storage()
-        .persistent()
-        .set(&ReserveDataKey::ReserveAmmTarget(asset.clone()), &amm_contract);
+    env.storage().persistent().set(
+        &ReserveDataKey::ReserveAmmTarget(asset.clone()),
+        &amm_contract,
+    );
 
     let topics = (Symbol::new(env, "reserve_amm_target_set"), caller);
     env.events().publish(topics, (asset, amm_contract));
@@ -273,7 +283,9 @@ pub fn record_reserve_deploy_to_amm(
 
     let lp_key = ReserveDataKey::ReserveAmmLpBalance(asset.clone());
     let current_lp: i128 = env.storage().persistent().get(&lp_key).unwrap_or(0);
-    let new_lp = current_lp.checked_add(lp_tokens_received).ok_or(ReserveError::Overflow)?;
+    let new_lp = current_lp
+        .checked_add(lp_tokens_received)
+        .ok_or(ReserveError::Overflow)?;
     env.storage().persistent().set(&lp_key, &new_lp);
 
     let topics = (Symbol::new(env, "reserve_deployed_to_amm"), caller);

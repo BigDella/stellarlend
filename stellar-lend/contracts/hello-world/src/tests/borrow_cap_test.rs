@@ -27,12 +27,7 @@ fn collateral_config(env: &Env, asset: Option<Address>) -> AssetConfig {
     }
 }
 
-fn borrow_config(
-    env: &Env,
-    asset: Option<Address>,
-    price: i128,
-    max_borrow: i128,
-) -> AssetConfig {
+fn borrow_config(env: &Env, asset: Option<Address>, price: i128, max_borrow: i128) -> AssetConfig {
     AssetConfig {
         asset: asset.clone(),
         collateral_factor: 8000,
@@ -61,7 +56,10 @@ fn setup_protocol<'a>(
     client.initialize(admin);
     client.initialize_ca(admin);
     // Register collateral asset (native XLM)
-    client.initialize_asset(&collateral_asset, &collateral_config(env, collateral_asset.clone()));
+    client.initialize_asset(
+        &collateral_asset,
+        &collateral_config(env, collateral_asset.clone()),
+    );
     // Register borrow asset (e.g. USDC)
     client.initialize_asset(
         &borrow_asset,

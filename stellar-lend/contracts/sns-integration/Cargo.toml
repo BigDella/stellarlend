@@ -1,0 +1,14 @@
+[package]
+name = "sns-integration"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+soroban-sdk = { workspace = true, features = ["alloc"] }
+stellarlend-common = { path = "../common" }
+stellarlend-shared-deadline = { path = "../shared-deadline" }
+
+[dev-dependencies]

@@ -102,7 +102,9 @@ export class TransactionBuilderService {
     const step = this.findStep(tx, req.stepId);
 
     if (step.status !== 'approved') {
-      throw Object.assign(new Error('Step must be in approved status before execution'), { status: 400 });
+      throw Object.assign(new Error('Step must be in approved status before execution'), {
+        status: 400,
+      });
     }
 
     step.signedXdr = req.signedXdr;
@@ -174,9 +176,7 @@ export class TransactionBuilderService {
       }
       result.push(tx);
     }
-    return result.sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    return result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   cleanupExpired(): number {

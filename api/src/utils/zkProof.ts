@@ -49,10 +49,7 @@ export function generateCommitment(amount: bigint, nonce: string): AmountCommitm
   return { commitment, nonce, timestamp: Date.now() };
 }
 
-export function openCommitment(
-  commitment: AmountCommitment,
-  amount: bigint
-): boolean {
+export function openCommitment(commitment: AmountCommitment, amount: bigint): boolean {
   const expected = sha256Hex(`${amount.toString()}:${commitment.nonce}`);
   return expected === commitment.commitment;
 }
@@ -115,7 +112,9 @@ export function verifyRangeProof(proof: RangeProof, nonce: string, amount: bigin
 
   // Recompute proof hash
   const expectedProofHash = sha256Hex(
-    [proof.commitment, ...proof.bitCommitments, proof.rangeBound.min, proof.rangeBound.max].join(':')
+    [proof.commitment, ...proof.bitCommitments, proof.rangeBound.min, proof.rangeBound.max].join(
+      ':'
+    )
   );
 
   return expectedProofHash === proof.proofHash;
@@ -171,9 +170,5 @@ export function verifyTransferProof(
   if (!openCommitment(proof.senderCommitment, senderAmount)) return false;
   if (!openCommitment(proof.recipientCommitment, recipientAmount)) return false;
 
-  return verifyRangeProof(
-    proof.rangeProof,
-    recipientNonce,
-    recipientAmount
-  );
+  return verifyRangeProof(proof.rangeProof, recipientNonce, recipientAmount);
 }

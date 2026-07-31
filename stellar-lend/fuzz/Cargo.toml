@@ -23,6 +23,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "lending_critical"
+path = "fuzz_targets/lending_critical.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "amm_actions"
 path = "fuzz_targets/amm_actions.rs"
 test = false

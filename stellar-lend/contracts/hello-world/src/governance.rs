@@ -6,9 +6,9 @@ pub use crate::errors::GovernanceError;
 pub use crate::storage::{GovernanceDataKey, GuardianConfig};
 
 pub use crate::types::{
-    DelegationRecord, GovernanceAnalytics, GovernanceConfig, MultisigConfig, Proposal,
-    ParameterOptimizationRecommendation, ProposalOutcome, ProposalSimulationResult, ProposalStatus,
-    ProposalType, RecoveryRequest, VoteInfo, VoteLock, VotePowerSnapshot, VoteType,
+    DelegationRecord, GovernanceAnalytics, GovernanceConfig, MultisigConfig,
+    ParameterOptimizationRecommendation, Proposal, ProposalOutcome, ProposalSimulationResult,
+    ProposalStatus, ProposalType, RecoveryRequest, VoteInfo, VoteLock, VotePowerSnapshot, VoteType,
     BASIS_POINTS_SCALE, DEFAULT_EXECUTION_DELAY, DEFAULT_QUORUM_BPS, DEFAULT_RECOVERY_PERIOD,
     DEFAULT_TIMELOCK_DURATION, DEFAULT_VOTING_PERIOD, DEFAULT_VOTING_THRESHOLD,
     DELEGATION_DEADLINE, MAX_DELEGATION_DEPTH, MIN_TIMELOCK_DELAY, PROPOSAL_RATE_LIMIT,
@@ -24,6 +24,7 @@ use crate::events::{
 };
 
 use crate::{interest_rate, risk_management, risk_params};
+use stellarlend_shared_deadline::{is_expired, is_expired_strict};
 
 /// Maximum byte length for a proposal description string.
 pub const MAX_DESCRIPTION_LEN: u32 = 256;
@@ -226,6 +227,17 @@ pub fn vote(
         return Err(GovernanceError::ProposalNotActive);
     }
 
+    if now < proposal.start_time {
+        return Err(GovernanceError::ProposalNotActive);
+    }
+    if is_expired_strict(env, proposal.end_time) {
+        proposal.status = ProposalStatus::Expired;
+        env.storage()
+            .persistent()
+            .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
+        return Err(GovernanceError::ProposalExpired);
+    }
+
     let vote_key = GovernanceDataKey::Vote(proposal_id, voter.clone());
     if env.storage().persistent().has(&vote_key) {
         return Err(GovernanceError::AlreadyVoted);
@@ -234,8 +246,6 @@ pub fn vote(
     // --- Flash loan protection: use snapshot-based voting power ---
     let voting_power =
         get_vote_power_with_delegation(env, proposal_id, &voter, &config.vote_token)?;
-    let token_client = TokenClient::new(env, &config.vote_token);
-    let voting_power = token_client.balance(&voter);
 
     if voting_power == 0 {
         return Err(GovernanceError::NoVotingPower);
@@ -313,7 +323,7 @@ pub fn queue_proposal(
         _ => {}
     }
 
-    if now > proposal.end_time + DEFAULT_TIMELOCK_DURATION {
+    if is_expired(env, proposal.end_time.saturating_add(config.timelock_duration)) {
         proposal.status = ProposalStatus::Expired;
         env.storage()
             .persistent()
@@ -437,9 +447,10 @@ pub fn simulate_proposal(
         .ok_or(GovernanceError::ProposalNotFound)?;
 
     let result = compute_simulation(env, &proposal, &config);
-    env.storage()
-        .persistent()
-        .set(&GovernanceDataKey::ProposalSimulationCache(proposal_id), &result);
+    env.storage().persistent().set(
+        &GovernanceDataKey::ProposalSimulationCache(proposal_id),
+        &result,
+    );
     Ok(result)
 }
 
@@ -485,11 +496,10 @@ pub fn get_parameter_optimization_recommendation(
     // Heuristic:
     // - low participation => reduce quorum moderately
     // - suspicious activity => raise quorum and threshold moderately
-    let votes_per_proposal = if analytics.total_proposals == 0 {
-        0
-    } else {
-        analytics.total_votes / analytics.total_proposals
-    };
+    let votes_per_proposal = analytics
+        .total_votes
+        .checked_div(analytics.total_proposals)
+        .unwrap_or(0);
 
     let mut suggested_quorum_bps = config.quorum_bps;
     if votes_per_proposal < 10 && suggested_quorum_bps > 2_000 {
@@ -501,8 +511,7 @@ pub fn get_parameter_optimization_recommendation(
 
     let mut suggested_vote_threshold = config.default_voting_threshold;
     if analytics.suspicious_proposals > 0 {
-        suggested_vote_threshold =
-            (suggested_vote_threshold + 250).min(BASIS_POINTS_SCALE);
+        suggested_vote_threshold = (suggested_vote_threshold + 250).min(BASIS_POINTS_SCALE);
     }
 
     let transparency_note = String::from_str(
@@ -518,9 +527,10 @@ pub fn get_parameter_optimization_recommendation(
         transparency_note,
     };
 
-    env.storage()
-        .persistent()
-        .set(&GovernanceDataKey::ParameterOptimizationCache, &recommendation);
+    env.storage().persistent().set(
+        &GovernanceDataKey::ParameterOptimizationCache,
+        &recommendation,
+    );
 
     Ok(recommendation)
 }
@@ -562,7 +572,7 @@ pub fn execute_proposal(
         return Err(GovernanceError::ExecutionTooEarly);
     }
 
-    if now > execution_time + config.timelock_duration {
+    if is_expired(env, execution_time.saturating_add(config.timelock_duration)) {
         proposal.status = ProposalStatus::Expired;
         env.storage()
             .persistent()
@@ -951,6 +961,12 @@ pub fn execute_multisig_proposal(
 ) -> Result<(), GovernanceError> {
     executor.require_auth();
 
+    let config: GovernanceConfig = env
+        .storage()
+        .instance()
+        .get(&GovernanceDataKey::Config)
+        .ok_or(GovernanceError::NotInitialized)?;
+
     let multisig_config = get_multisig_config(env).ok_or(GovernanceError::NotInitialized)?;
     if !multisig_config.admins.contains(&executor) {
         return Err(GovernanceError::Unauthorized);
@@ -964,6 +980,18 @@ pub fn execute_multisig_proposal(
 
     if proposal.status != ProposalStatus::Pending {
         return Err(GovernanceError::InvalidProposalStatus);
+    }
+
+    let now = env.ledger().timestamp();
+    if now <= proposal.end_time {
+        return Err(GovernanceError::ProposalNotReady);
+    }
+    if is_expired(env, proposal.end_time.saturating_add(config.timelock_duration)) {
+        proposal.status = ProposalStatus::Expired;
+        env.storage()
+            .persistent()
+            .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
+        return Err(GovernanceError::ProposalExpired);
     }
 
     let approvals = get_proposal_approvals(env, proposal_id).unwrap_or_else(|| Vec::new(env));
@@ -1187,6 +1215,9 @@ pub fn start_recovery(
         initiator: initiator.clone(),
         initiated_at: now,
         expires_at: now + DEFAULT_RECOVERY_PERIOD,
+        // #675 — see recovery.rs's start_recovery for the rationale; kept
+        // consistent here since both paths construct the same RecoveryRequest.
+        ready_at: now + crate::types::DEFAULT_RECOVERY_DELAY,
     };
 
     env.storage().persistent().set(&recovery_key, &request);
@@ -1860,4 +1891,19 @@ pub fn emit_recovery_executed_event(
         new_admin.clone(),
     );
     env.events().publish(topics, executor.clone());
+}
+
+/// #675
+pub fn emit_recovery_cancelled_event(
+    env: &Env,
+    old_admin: &Address,
+    new_admin: &Address,
+    caller: &Address,
+) {
+    let topics = (
+        Symbol::new(env, "recovery_cancelled"),
+        old_admin.clone(),
+        new_admin.clone(),
+    );
+    env.events().publish(topics, caller.clone());
 }
