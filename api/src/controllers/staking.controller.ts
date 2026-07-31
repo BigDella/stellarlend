@@ -14,6 +14,7 @@ export const stake = async (req: Request, res: Response, next: NextFunction) => 
     return res.status(200).json({ success: true, position });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -24,6 +25,7 @@ export const unstake = async (req: Request, res: Response, next: NextFunction) =
     return res.status(200).json({ success: true, position });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -34,6 +36,7 @@ export const delegate = async (req: Request, res: Response, next: NextFunction) 
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -44,26 +47,29 @@ export const revokeDelegation = async (req: Request, res: Response, next: NextFu
     return res.status(200).json({ success: true, position });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
 export const claimRewards = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress } = req.params;
-    const result = stakingService.claimRewards(userAddress);
+    const result = stakingService.claimRewards(userAddress!);
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
 export const getPosition = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { userAddress } = req.params;
-    const position = stakingService.getPosition(userAddress);
+    const position = stakingService.getPosition(userAddress!);
     return res.status(200).json({ success: true, position });
   } catch (err) {
     next(err);
+    return;
   }
 };
 
@@ -73,5 +79,6 @@ export const getAllPositions = async (_req: Request, res: Response, next: NextFu
     return res.status(200).json({ success: true, positions, total: positions.length });
   } catch (err) {
     next(err);
+    return;
   }
 };

@@ -1,0 +1,25 @@
+{
+  "id": "2008-financial-crisis",
+  "name": "2008 Financial Crisis",
+  "description": "Lehman Brothers collapse triggers global credit freeze. All asset prices plunge, correlations spike to 1, and liquidity evaporates.",
+  "category": "historical",
+  "version": "1.0.0",
+  "created": "2024-01-01T00:00:00Z",
+  "priceChanges": [
+    { "asset": "XLM", "changePercent": -50 },
+    { "asset": "BTC", "changePercent": -45 },
+    { "asset": "ETH", "changePercent": -50 },
+    { "asset": "USDC", "changePercent": -5 }
+  ],
+  "correlationShifts": [
+    { "asset1": "XLM", "asset2": "BTC", "newCorrelation": 0.95 },
+    { "asset1": "XLM", "asset2": "ETH", "newCorrelation": 0.95 },
+    { "asset1": "BTC", "asset2": "ETH", "newCorrelation": 0.95 }
+  ],
+  "volatilityMultipliers": [
+    { "asset": "XLM", "multiplier": 4.0 },
+    { "asset": "BTC", "multiplier": 3.5 },
+    { "asset": "ETH", "multiplier": 3.5 }
+  ],
+  "tags": ["systemic", "credit-crunch", "contagion"]
+}

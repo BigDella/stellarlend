@@ -573,10 +573,16 @@ pub fn get_lending_index(env: &Env) -> LendingIndex {
 ///
 /// Idempotent within the same ledger second (returns stored value unchanged).
 pub fn update_lending_index(env: &Env) -> Result<LendingIndex, InterestRateError> {
+    // Transaction-local cache for lending index avoids repeated global store reads
+    if let Some(cached_index) = crate::storage::get_temp_lending_index(env) {
+        return Ok(cached_index);
+    }
+
     let mut idx = get_lending_index(env);
     let current_time = env.ledger().timestamp();
 
     if current_time <= idx.last_update {
+        set_temp_lending_index(env, idx.clone());
         return Ok(idx);
     }
 
@@ -621,12 +627,16 @@ pub fn update_lending_index(env: &Env) -> Result<LendingIndex, InterestRateError
     env.storage()
         .persistent()
         .set(&InterestRateDataKey::LendingIndex, &idx);
+    set_temp_lending_index(env, idx.clone());
 
     Ok(idx)
 }
 
 /// Return the current borrow index (scaled by INDEX_SCALE).
 pub fn get_borrow_index(env: &Env) -> i128 {
+    if let Some(cached_index) = crate::storage::get_temp_lending_index(env) {
+        return cached_index.borrow_index;
+    }
     get_lending_index(env).borrow_index
 }
 
@@ -717,4 +727,183 @@ mod tests {
             9010
         );
     }
+}
+
+// ── Rate History & Dynamic Adjustment (#681) ───────────────────────────────
+
+/// Maximum number of rate history entries to keep per asset
+const MAX_RATE_HISTORY: u32 = 100;
+
+/// A snapshot of the interest rate at a point in time
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateHistoryEntry {
+    /// Borrow rate at this point (bps)
+    pub borrow_rate_bps: i128,
+    /// Supply rate at this point (bps)
+    pub supply_rate_bps: i128,
+    /// Utilization at this point (bps)
+    pub utilization_bps: i128,
+    /// Timestamp of the snapshot
+    pub timestamp: u64,
+}
+
+/// Storage keys for rate history
+#[contracttype]
+#[derive(Clone)]
+pub enum RateHistoryKey {
+    /// Vec<RateHistoryEntry> — rolling window of rate snapshots
+    RateHistory,
+    /// RateHistoryEntry — the last recorded snapshot
+    LastSnapshot,
+}
+
+/// Record a rate snapshot in the history.
+///
+/// Should be called whenever interest is accrued or rates are updated.
+pub fn record_rate_snapshot(env: &Env) -> Result<(), InterestRateError> {
+    let borrow_rate = calculate_borrow_rate(env)?;
+    let supply_rate = calculate_supply_rate(env)?;
+    let utilization = calculate_utilization(env)?;
+    let now = env.ledger().timestamp();
+
+    let entry = RateHistoryEntry {
+        borrow_rate_bps: borrow_rate,
+        supply_rate_bps: supply_rate,
+        utilization_bps: utilization,
+        timestamp: now,
+    };
+
+    // Store as last snapshot
+    env.storage()
+        .persistent()
+        .set(&RateHistoryKey::LastSnapshot, &entry);
+
+    // Append to rolling history
+    let history_key = RateHistoryKey::RateHistory;
+    let mut history: Vec<RateHistoryEntry> = env
+        .storage()
+        .persistent()
+        .get::<RateHistoryKey, Vec<RateHistoryEntry>>(&history_key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    history.push_back(entry);
+
+    // Trim to max size
+    let mut trimmed: Vec<RateHistoryEntry> = Vec::new(env);
+    let start = if history.len() as u32 > MAX_RATE_HISTORY {
+        history.len() - MAX_RATE_HISTORY
+    } else {
+        0
+    };
+    for i in start..history.len() {
+        trimmed.push_back(history.get(i).unwrap());
+    }
+
+    env.storage().persistent().set(&history_key, &trimmed);
+
+    Ok(())
+}
+
+/// Get the rate history.
+pub fn get_rate_history(env: &Env) -> Vec<RateHistoryEntry> {
+    let key = RateHistoryKey::RateHistory;
+    env.storage()
+        .persistent()
+        .get::<RateHistoryKey, Vec<RateHistoryEntry>>(&key)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Get the last recorded rate snapshot.
+pub fn get_last_rate_snapshot(env: &Env) -> Option<RateHistoryEntry> {
+    env.storage()
+        .persistent()
+        .get::<RateHistoryKey, RateHistoryEntry>(&RateHistoryKey::LastSnapshot)
+}
+
+/// Simulate what the borrow rate would be at a given utilization level.
+///
+/// Does not modify state — purely a read-only calculation.
+///
+/// # Arguments
+/// * `env` - The Soroban environment
+/// * `target_utilization_bps` - The utilization to simulate (0-10000)
+///
+/// # Returns
+/// The simulated borrow rate in basis points
+pub fn simulate_rate_at_utilization(
+    env: &Env,
+    target_utilization_bps: i128,
+) -> Result<i128, InterestRateError> {
+    let config = get_interest_rate_config(env).ok_or(InterestRateError::InvalidParameter)?;
+
+    if target_utilization_bps < 0 || target_utilization_bps > BASIS_POINTS_SCALE {
+        return Err(InterestRateError::InvalidParameter);
+    }
+
+    let mut rate = config.base_rate_bps;
+
+    if target_utilization_bps <= config.kink_utilization_bps {
+        if config.kink_utilization_bps > 0 {
+            let rate_increase = target_utilization_bps
+                .checked_mul(config.multiplier_bps)
+                .ok_or(InterestRateError::Overflow)?
+                .checked_div(config.kink_utilization_bps)
+                .ok_or(InterestRateError::DivisionByZero)?;
+            rate = rate
+                .checked_add(rate_increase)
+                .ok_or(InterestRateError::Overflow)?;
+        }
+    } else {
+        let rate_at_kink = config
+            .base_rate_bps
+            .checked_add(config.multiplier_bps)
+            .ok_or(InterestRateError::Overflow)?;
+
+        let above_kink = target_utilization_bps
+            .checked_sub(config.kink_utilization_bps)
+            .ok_or(InterestRateError::Overflow)?;
+
+        let max_above = BASIS_POINTS_SCALE
+            .checked_sub(config.kink_utilization_bps)
+            .ok_or(InterestRateError::Overflow)?;
+
+        if max_above > 0 {
+            let additional = above_kink
+                .checked_mul(config.jump_multiplier_bps)
+                .ok_or(InterestRateError::Overflow)?
+                .checked_div(max_above)
+                .ok_or(InterestRateError::DivisionByZero)?;
+            rate = rate_at_kink
+                .checked_add(additional)
+                .ok_or(InterestRateError::Overflow)?;
+        } else {
+            rate = rate_at_kink;
+        }
+    }
+
+    rate = rate
+        .checked_add(config.emergency_adjustment_bps)
+        .ok_or(InterestRateError::Overflow)?;
+
+    Ok(rate.max(config.rate_floor_bps).min(config.rate_ceiling_bps))
+}
+
+/// Get the average borrow rate over the recorded history.
+pub fn get_average_borrow_rate(env: &Env) -> Result<i128, InterestRateError> {
+    let history = get_rate_history(env);
+    if history.is_empty() {
+        return Ok(0);
+    }
+
+    let mut total: i128 = 0;
+    for entry in history.iter() {
+        total = total
+            .checked_add(entry.borrow_rate_bps)
+            .ok_or(InterestRateError::Overflow)?;
+    }
+
+    total
+        .checked_div(history.len() as i128)
+        .ok_or(InterestRateError::DivisionByZero)
 }

@@ -957,8 +957,12 @@ fn record_liquidity_operation(
 
 // Event emission functions
 
-// Event structs
-#[contractevent]
+// ─── Standardized event structs ───────────────────────────────────────────────
+// All events carry: actor/user, relevant amounts, and a `timestamp` (ledger
+// timestamp in seconds). Topic prefixes follow the StellarLend convention:
+// short snake_case labels used by indexers.
+
+#[contractevent(topics = ["amm_swap"])]
 #[derive(Clone, Debug)]
 pub struct SwapExecutedEvent {
     pub user: Address,
@@ -966,9 +970,10 @@ pub struct SwapExecutedEvent {
     pub amount_in: i128,
     pub amount_out: i128,
     pub effective_price: i128,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["amm_liq_add"])]
 #[derive(Clone, Debug)]
 pub struct LiquidityAddedEvent {
     pub user: Address,
@@ -976,17 +981,19 @@ pub struct LiquidityAddedEvent {
     pub amount_a: i128,
     pub amount_b: i128,
     pub lp_tokens: i128,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["amm_liq_rm"])]
 #[derive(Clone, Debug)]
 pub struct LiquidityRemovedEvent {
     pub user: Address,
     pub protocol: Address,
     pub lp_tokens: i128,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["amm_op"])]
 #[derive(Clone, Debug)]
 pub struct AmmOperationEvent {
     pub user: Address,
@@ -996,13 +1003,14 @@ pub struct AmmOperationEvent {
     pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["amm_cb_valid"])]
 #[derive(Clone, Debug)]
 pub struct CallbackValidatedEvent {
     pub caller: Address,
     pub user: Address,
     pub operation: Symbol,
     pub nonce: u64,
+    pub timestamp: u64,
 }
 
 /// Emit swap executed event
@@ -1019,6 +1027,7 @@ fn emit_swap_executed_event(
         amount_in: params.amount_in,
         amount_out,
         effective_price,
+        timestamp: env.ledger().timestamp(),
     }
     .publish(env);
 }
@@ -1036,6 +1045,7 @@ fn emit_liquidity_added_event(
         amount_a: params.amount_a,
         amount_b: params.amount_b,
         lp_tokens,
+        timestamp: env.ledger().timestamp(),
     }
     .publish(env);
 }
@@ -1051,6 +1061,7 @@ fn emit_liquidity_removed_event(
         user: user.clone(),
         protocol: params.protocol.clone(),
         lp_tokens,
+        timestamp: env.ledger().timestamp(),
     }
     .publish(env);
 }
@@ -1080,6 +1091,7 @@ fn emit_callback_validated_event(env: &Env, caller: &Address, callback_data: &Am
         user: callback_data.user.clone(),
         operation: callback_data.operation.clone(),
         nonce: callback_data.nonce,
+        timestamp: env.ledger().timestamp(),
     }
     .publish(env);
 }

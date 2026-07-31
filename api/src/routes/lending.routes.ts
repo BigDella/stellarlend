@@ -220,4 +220,25 @@ router.get(
  */
 router.get('/transactions/:userAddress/stream', lendingController.streamTransactionHistory);
 
+/**
+ * @openapi
+ * /lending/liquidation-price/{asset}:
+ *   get:
+ *     summary: Get TWAP-based liquidation price
+ *     description: Returns the manipulation-resistant TWAP liquidation price for an asset with fallback to median across sources.
+ *     tags:
+ *       - Lending
+ *     parameters:
+ *       - in: path
+ *         name: asset
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Asset contract address
+ *     responses:
+ *       200:
+ *         description: TWAP-based liquidation price
+ */
+router.get('/liquidation-price/:asset', lendingController.getLiquidationPrice);
+
 export default router;

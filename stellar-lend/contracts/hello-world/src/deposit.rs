@@ -90,6 +90,10 @@ pub enum DepositDataKey {
     UserAssetList(Address),
     /// Recorded borrow index at last user accrual: user -> i128
     UserBorrowIndex(Address),
+    /// Emergency withdrawal state
+    EmergencyState,
+    /// Emergency withdrawal record: (user, timestamp) -> EmergencyWithdrawal
+    EmergencyWithdrawal(Address, u64),
 }
 
 /// Asset parameters for collateral
@@ -691,5 +695,42 @@ fn check_risk_management_pause(env: &Env) -> Result<(), DepositError> {
     // For now, we'll skip this check and rely on the old pause switch system
     // The risk management pause switches should be checked at the contract API level
 
+    Ok(())
+}
+
+/// Get user's collateral balance
+pub fn get_user_balance(env: &Env, user: &Address, _asset: Option<Address>) -> i128 {
+    let collateral_key = DepositDataKey::CollateralBalance(user.clone());
+    env.storage()
+        .persistent()
+        .get::<DepositDataKey, i128>(&collateral_key)
+        .unwrap_or(0)
+}
+
+/// Get total collateral supply (TVL)
+pub fn get_total_supply(env: &Env, _asset: Option<Address>) -> i128 {
+    let analytics_key = DepositDataKey::ProtocolAnalytics;
+    env.storage()
+        .persistent()
+        .get::<DepositDataKey, ProtocolAnalytics>(&analytics_key)
+        .unwrap_or(ProtocolAnalytics {
+            total_deposits: 0,
+            total_borrows: 0,
+            total_value_locked: 0,
+        })
+        .total_value_locked
+}
+
+/// Update user's collateral balance
+pub fn update_user_balance(
+    env: &Env,
+    user: &Address,
+    _asset: Option<Address>,
+    new_balance: i128,
+) -> Result<(), DepositError> {
+    let collateral_key = DepositDataKey::CollateralBalance(user.clone());
+    env.storage()
+        .persistent()
+        .set(&collateral_key, &new_balance);
     Ok(())
 }

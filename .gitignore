@@ -61,6 +61,7 @@ stellar-lend/fuzz/coverage/
 **/.nyc_output/
 **/test-results/
 *.lcov
+tests/e2e/e2e-report.json
 
 # Database files
 *.db

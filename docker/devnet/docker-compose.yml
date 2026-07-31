@@ -1,0 +1,180 @@
+version: "3.8"
+
+# ---------------------------------------------------------------------------
+# StellarLend Devnet -- Full local Soroban environment
+#
+# Start:   docker compose up -d
+# Init:    docker compose exec init-devnet /scripts/init-devnet.sh
+#          (runs automatically on first boot via the init-devnet service)
+# Reset:   ./reset-devnet.sh
+# ---------------------------------------------------------------------------
+
+x-common-env: &common-env
+  NODE_ENV: development
+  LOG_LEVEL: debug
+
+services:
+  # -- Soroban local devnet (Stellar quickstart) ----------------------------
+  soroban-devnet:
+    image: stellar/quickstart:latest
+    container_name: stellarlend-soroban-devnet
+    command: --local --enable-soroban-rpc
+    ports:
+      - "${SOROBAN_RPC_PORT:-8000}:8000"       # Soroban RPC + Horizon
+      - "${FRIENDBOT_PORT:-8001}:8000"          # Friendbot (same port, different path)
+    environment:
+      ENABLE_LOGS: "true"
+      NETWORK: local
+    volumes:
+      - soroban_data:/opt/stellar
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  # -- PostgreSQL -----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: stellarlend-devnet-postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: stellarlend
+      POSTGRES_PASSWORD: stellarlend
+      POSTGRES_DB: stellarlend
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../api/db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stellarlend -d stellarlend"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # -- Redis ----------------------------------------------------------------
+  redis:
+    image: redis:7.2-alpine
+    container_name: stellarlend-devnet-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # -- API ------------------------------------------------------------------
+  api:
+    build:
+      context: ../../api
+      dockerfile: Dockerfile
+      target: development
+    container_name: stellarlend-devnet-api
+    ports:
+      - "${API_PORT:-3000}:3000"
+    environment:
+      <<: *common-env
+      PORT: 3000
+      STELLAR_NETWORK: local
+      HORIZON_URL: http://soroban-devnet:8000
+      SOROBAN_RPC_URL: http://soroban-devnet:8000/soroban/rpc
+      NETWORK_PASSPHRASE: "Standalone Network ; February 2017"
+      CONTRACT_ID: ${CONTRACT_ID:-PLACEHOLDER_CONTRACT_ID}
+      JWT_SECRET: ${JWT_SECRET:-devnet-jwt-secret-do-not-use-in-prod}
+      JWT_EXPIRES_IN: 24h
+      REDIS_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgres://stellarlend:stellarlend@postgres:5432/stellarlend
+      ORACLE_API_URL: http://oracle:4000/prices
+      RATE_LIMIT_WINDOW_MS: 900000
+      RATE_LIMIT_MAX_REQUESTS: 10000
+      BODY_SIZE_LIMIT: 100kb
+    volumes:
+      - ../../api/src:/app/src:delegated
+      - ../../api/package.json:/app/package.json:ro
+      - ../../api/tsconfig.json:/app/tsconfig.json:ro
+      - api_node_modules:/app/node_modules
+    depends_on:
+      soroban-devnet:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # -- Oracle (mock price feed) ---------------------------------------------
+  oracle:
+    build:
+      context: ../../oracle
+      dockerfile: Dockerfile
+    container_name: stellarlend-devnet-oracle
+    ports:
+      - "${ORACLE_PORT:-4000}:4000"
+    environment:
+      <<: *common-env
+      PORT: 4000
+      UPDATE_INTERVAL_MS: 5000
+    depends_on:
+      soroban-devnet:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # -- Init service (one-shot) ----------------------------------------------
+  init-devnet:
+    image: stellar/quickstart:latest
+    container_name: stellarlend-devnet-init
+    entrypoint: /bin/bash
+    command: /scripts/init-devnet.sh
+    environment:
+      SOROBAN_RPC_URL: http://soroban-devnet:8000/soroban/rpc
+      HORIZON_URL: http://soroban-devnet:8000
+      FRIENDBOT_URL: http://soroban-devnet:8000/friendbot
+      NETWORK_PASSPHRASE: "Standalone Network ; February 2017"
+      API_URL: http://api:3000
+      ORACLE_URL: http://oracle:4000
+    volumes:
+      - ./init-devnet.sh:/scripts/init-devnet.sh:ro
+      - ./genesis.sh:/scripts/genesis.sh:ro
+      - ./seed-data:/scripts/seed-data:ro
+      - ../../stellar-lend/contracts:/contracts:ro
+      - devnet_deploy:/deploy
+    depends_on:
+      soroban-devnet:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  soroban_data:
+  postgres_data:
+  redis_data:
+  api_node_modules:
+  devnet_deploy:
+
+networks:
+  default:
+    name: stellarlend-devnet

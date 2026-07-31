@@ -1,25 +1,6 @@
 name: Gas Benchmark Suite
 
-on:
-  push:
-    branches: ["main", "dev"]
-    paths:
-      - "stellar-lend/contracts/**"
-      - "stellar-lend/benchmarks/**"
-      - ".github/workflows/gas-benchmarks.yml"
-  pull_request:
-    branches: ["main", "dev"]
-    paths:
-      - "stellar-lend/contracts/**"
-      - "stellar-lend/benchmarks/**"
-      - ".github/workflows/gas-benchmarks.yml"
-  # Allow manual trigger for on-demand profiling
-  workflow_dispatch:
-    inputs:
-      compare_baseline:
-        description: "Compare against baseline (true/false)"
-        required: false
-        default: "true"
+on: workflow_dispatch
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -128,6 +109,13 @@ jobs:
               failed = report["failed"]
               out.write(f"\n**Total:** {total} | **Passed:** {passed} | **Failed:** {failed}\n")
           EOF
+          
+          # Also append markdown report to summary if available
+          if [ -f benchmark-results.md ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            cat benchmark-results.md >> $GITHUB_STEP_SUMMARY
+          fi
           fi
 
       - name: Upload benchmark results
@@ -137,6 +125,8 @@ jobs:
           name: gas-benchmark-results-${{ github.sha }}
           path: |
             stellar-lend/benchmark-results.json
+            stellar-lend/benchmark-results.md
+            stellar-lend/benchmarks/history.json
             stellar-lend/benchmark-output.log
             stellar-lend/benchmark-comparison.log
           retention-days: 90

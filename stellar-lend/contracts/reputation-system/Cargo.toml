@@ -1,0 +1,19 @@
+[package]
+name = "stellarlend-reputation"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+stellarlend-common = { path = "../common" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+default = []
+testutils = ["soroban-sdk/testutils"]

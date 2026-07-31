@@ -25,7 +25,11 @@ pub enum WithdrawDataKey {
 pub struct WithdrawPosition {
     pub amount: i128,
     pub last_withdraw_time: u64,
+    /// Expiration timestamp (0 = never expire)
+    pub expires_at: u64,
 }
+
+const WITHDRAW_POSITION_TTL: u64 = 30 * 24 * 3600; // 30 days
 
 pub fn withdraw(
     env: &Env,
@@ -57,7 +61,8 @@ pub fn withdraw(
     position.amount = position.amount.checked_sub(amount)
         .ok_or(WithdrawError::Overflow)?;
     position.last_withdraw_time = env.ledger().timestamp();
-    
+    position.expires_at = env.ledger().timestamp().saturating_add(WITHDRAW_POSITION_TTL);
+
     save_withdraw_position(env, &user, &position);
 
     // ✓ INTERACTION - External call LAST
@@ -68,13 +73,31 @@ pub fn withdraw(
 }
 
 fn get_withdraw_position(env: &Env, user: &Address) -> WithdrawPosition {
-    env.storage()
+    let now = env.ledger().timestamp();
+    if let Some(stored) = env
+        .storage()
         .persistent()
-        .get(&WithdrawDataKey::UserBalance(user.clone()))
-        .unwrap_or(WithdrawPosition {
+        .get::<WithdrawDataKey, WithdrawPosition>(&WithdrawDataKey::UserBalance(user.clone()))
+    {
+        if stored.expires_at != 0 && stored.expires_at <= now {
+            let default = WithdrawPosition {
+                amount: 0,
+                last_withdraw_time: now,
+                expires_at: 0,
+            };
+            env.storage()
+                .persistent()
+                .set(&WithdrawDataKey::UserBalance(user.clone()), &default);
+            return default;
+        }
+        stored
+    } else {
+        WithdrawPosition {
             amount: 0,
-            last_withdraw_time: env.ledger().timestamp(),
-        })
+            last_withdraw_time: now,
+            expires_at: 0,
+        }
+    }
 }
 
 fn save_withdraw_position(env: &Env, user: &Address, position: &WithdrawPosition) {
@@ -87,8 +110,9 @@ pub fn initialize_withdraw_settings(
     env: &Env,
     min_withdrawal: i128,
 ) -> Result<(), WithdrawError> {
+    // Keep global min withdrawal in instance storage for fast access
     env.storage()
-        .persistent()
+        .instance()
         .set(&WithdrawDataKey::MinWithdrawal, &min_withdrawal);
     Ok(())
 }
@@ -100,4 +124,25 @@ pub fn set_withdraw_paused(env: &Env, paused: bool) -> Result<(), WithdrawError>
             .set(&PauseType::Withdraw, &true);
     }
     Ok(())
+}
+
+/// Cleanup helper: remove expired withdraw position for a user
+pub fn cleanup_expired_withdraw_position(env: &Env, user: Address) {
+    let now = env.ledger().timestamp();
+    if let Some(stored) = env
+        .storage()
+        .persistent()
+        .get::<WithdrawDataKey, WithdrawPosition>(&WithdrawDataKey::UserBalance(user.clone()))
+    {
+        if stored.expires_at != 0 && stored.expires_at <= now {
+            let default = WithdrawPosition {
+                amount: 0,
+                last_withdraw_time: now,
+                expires_at: 0,
+            };
+            env.storage()
+                .persistent()
+                .set(&WithdrawDataKey::UserBalance(user), &default);
+        }
+    }
 }

@@ -1,0 +1,20 @@
+# Benchmark Configuration
+# Environment-agnostic configuration for gas benchmarking
+
+[regression]
+# Regression threshold percentage (default: 5%)
+threshold = 5.0
+
+[output]
+# Default output paths
+json = "benchmark-results.json"
+markdown = "benchmark-results.md"
+history = "benchmarks/history.json"
+
+[baselines]
+# Path to baseline file for comparison
+baseline = "benchmarks/baseline.json"
+
+[environment]
+# Environment-specific settings can be overridden via environment variables
+# BENCHMARK_REGRESSION_THRESHOLD, BENCHMARK_OUTPUT_JSON, etc.

@@ -1,0 +1,20 @@
+[package]
+name = "risk-scoring"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+lending-risk = { path = "../lending-risk" }
+lending-types = { path = "../lending-types" }
+stellarlend-safe-math = { workspace = true }
+
+[features]
+default = []
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

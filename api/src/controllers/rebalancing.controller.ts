@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { StellarService } from '../services/stellar.service';
-import { config } from '../config';
+import { config } from '../config/index';
 import logger from '../utils/logger';
 import { emergencyPauseService } from '../services/emergencyPause.service';
 import { redisCacheService } from '../services/redisCache.service';
@@ -52,6 +52,7 @@ export const configureRebalancing = async (req: Request, res: Response, next: Ne
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -84,10 +85,15 @@ export const executeRebalancing = async (req: Request, res: Response, next: Next
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
-export const getRebalancingConfig = async (req: Request, res: Response) => {
+export const getRebalancingConfig = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+) => {
   try {
     const { userAddress } = req.query as any;
 
@@ -112,6 +118,7 @@ export const getRebalancingConfig = async (req: Request, res: Response) => {
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -147,6 +154,7 @@ export const setRebalancingEmergencyStop = async (
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };
 
@@ -176,5 +184,6 @@ export const setRebalancingPause = async (req: Request, res: Response, next: Nex
     return res.status(200).json(response);
   } catch (error) {
     next(error);
+    return;
   }
 };

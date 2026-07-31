@@ -1,11 +1,18 @@
 use crate::events::{
     UpgradeApprovalRecordedEvent, UpgradeApproverAddedEvent, UpgradeApproverRemovedEvent,
-    UpgradeExecutedEvent, UpgradeInitEvent, UpgradeProposedEvent, UpgradeRollbackEvent,
+    UpgradeEmergencyProposedEvent, UpgradeExecutedEvent, UpgradeInitEvent, UpgradeProposedEvent,
+    UpgradeRollbackEvent, UpgradeTimelockQueuedEvent,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
     Vec,
 };
+
+/// Standard upgrade timelock: 48 hours in seconds.
+pub const STANDARD_TIMELOCK_SECS: u64 = 172_800;
+
+/// Emergency upgrade timelock: 4 hours in seconds.
+pub const EMERGENCY_TIMELOCK_SECS: u64 = 14_400;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -20,6 +27,8 @@ pub enum UpgradeError {
     AlreadyApproved = 7,
     NotEnoughApprovals = 8,
     InvalidThreshold = 9,
+    TimelockNotElapsed = 10,
+    StorageLayoutMismatch = 11,
 }
 
 #[contracttype]
@@ -27,6 +36,8 @@ pub enum UpgradeError {
 pub enum UpgradeStage {
     Proposed,
     Approved,
+    /// Proposal has passed multisig but is waiting for the timelock to elapse.
+    TimelockQueued,
     Executed,
     RolledBack,
 }
@@ -42,6 +53,10 @@ pub struct UpgradeProposal {
     pub stage: UpgradeStage,
     pub prev_wasm_hash: Option<BytesN<32>>,
     pub prev_version: Option<u32>,
+    /// Ledger timestamp after which `upgrade_execute` may be called.
+    pub execute_after: Option<u64>,
+    /// True when this proposal was queued via the emergency path (4 h timelock).
+    pub is_emergency: bool,
 }
 
 #[contracttype]
@@ -52,6 +67,9 @@ pub struct UpgradeStatus {
     pub approval_count: u32,
     pub required_approvals: u32,
     pub target_version: u32,
+    /// Earliest timestamp at which execution is allowed (None = no timelock yet).
+    pub execute_after: Option<u64>,
+    pub is_emergency: bool,
 }
 
 #[contracttype]
@@ -217,6 +235,8 @@ impl UpgradeManager {
             stage,
             prev_wasm_hash: None,
             prev_version: None,
+            execute_after: None,
+            is_emergency: false,
         };
 
         env.storage()
@@ -267,7 +287,115 @@ impl UpgradeManager {
         count
     }
 
-    /// Executes an approved proposal. Caller must be an approver.
+    /// Queues an approved proposal into the timelock.
+    ///
+    /// Only callable once per proposal. Starts the 48 h (standard) countdown.
+    /// Emergency proposals use the 4 h path — call `upgrade_propose_emergency` instead.
+    pub fn upgrade_queue_timelock(env: Env, caller: Address, proposal_id: u64) {
+        caller.require_auth();
+        Self::assert_initialized(&env);
+        Self::assert_approver(&env, &caller);
+
+        let mut proposal = Self::proposal(env.clone(), proposal_id);
+        if proposal.stage != UpgradeStage::Approved {
+            panic_with_error!(&env, UpgradeError::InvalidStatus);
+        }
+
+        let execute_after = env
+            .ledger()
+            .timestamp()
+            .saturating_add(STANDARD_TIMELOCK_SECS);
+        proposal.stage = UpgradeStage::TimelockQueued;
+        proposal.execute_after = Some(execute_after);
+
+        env.storage()
+            .persistent()
+            .set(&UpgradeKey::Proposal(proposal_id), &proposal);
+
+        UpgradeTimelockQueuedEvent {
+            caller: caller.clone(),
+            proposal_id,
+            execute_after,
+            is_emergency: false,
+        }
+        .publish(&env);
+    }
+
+    /// Proposes an emergency upgrade with a 4 h timelock instead of 48 h.
+    ///
+    /// Requires admin. Counts the proposer's approval automatically; if the
+    /// threshold is already met the proposal jumps straight to `TimelockQueued`.
+    pub fn upgrade_propose_emergency(
+        env: Env,
+        caller: Address,
+        new_wasm_hash: BytesN<32>,
+        new_version: u32,
+    ) -> u64 {
+        caller.require_auth();
+        Self::assert_initialized(&env);
+        Self::assert_admin(&env, &caller);
+
+        let current_version = Self::current_version(env.clone());
+        if new_version <= current_version {
+            panic_with_error!(&env, UpgradeError::InvalidVersion);
+        }
+
+        let mut approvals = Vec::new(&env);
+        approvals.push_back(caller.clone());
+
+        let required = Self::required_approvals(env.clone());
+        let execute_after = env
+            .ledger()
+            .timestamp()
+            .saturating_add(EMERGENCY_TIMELOCK_SECS);
+        let stage = if approvals.len() >= required {
+            UpgradeStage::TimelockQueued
+        } else {
+            UpgradeStage::Proposed
+        };
+
+        let id: u64 = env
+            .storage()
+            .persistent()
+            .get(&UpgradeKey::NextProposalId)
+            .unwrap_or(1);
+
+        let proposal = UpgradeProposal {
+            id,
+            proposer: caller.clone(),
+            new_wasm_hash,
+            new_version,
+            approvals,
+            stage: stage.clone(),
+            prev_wasm_hash: None,
+            prev_version: None,
+            execute_after: if stage == UpgradeStage::TimelockQueued {
+                Some(execute_after)
+            } else {
+                None
+            },
+            is_emergency: true,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&UpgradeKey::Proposal(id), &proposal);
+        env.storage()
+            .persistent()
+            .set(&UpgradeKey::NextProposalId, &(id + 1));
+
+        UpgradeEmergencyProposedEvent {
+            caller: caller.clone(),
+            id,
+            new_version,
+            execute_after,
+        }
+        .publish(&env);
+
+        id
+    }
+
+    /// Executes an approved (and timelock-elapsed) proposal. Caller must be an approver.
     pub fn upgrade_execute(env: Env, caller: Address, proposal_id: u64) {
         caller.require_auth();
         Self::assert_initialized(&env);
@@ -279,6 +407,20 @@ impl UpgradeManager {
         }
         if proposal.approvals.len() < Self::required_approvals(env.clone()) {
             panic_with_error!(&env, UpgradeError::NotEnoughApprovals);
+        }
+
+        // Enforce timelock: proposal must be in TimelockQueued and past its execute_after.
+        if proposal.stage == UpgradeStage::TimelockQueued {
+            let execute_after = proposal
+                .execute_after
+                .unwrap_or_else(|| panic_with_error!(&env, UpgradeError::InvalidStatus));
+            if env.ledger().timestamp() < execute_after {
+                panic_with_error!(&env, UpgradeError::TimelockNotElapsed);
+            }
+        } else if proposal.stage != UpgradeStage::Approved {
+            // Proposals that have enough approvals but were never queued must go through
+            // upgrade_queue_timelock first before execution is allowed.
+            panic_with_error!(&env, UpgradeError::InvalidStatus);
         }
 
         let current_hash = Self::current_wasm_hash(env.clone());
@@ -354,6 +496,8 @@ impl UpgradeManager {
             approval_count: proposal.approvals.len(),
             required_approvals: Self::required_approvals(env),
             target_version: proposal.new_version,
+            execute_after: proposal.execute_after,
+            is_emergency: proposal.is_emergency,
         }
     }
 

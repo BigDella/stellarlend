@@ -45,11 +45,31 @@ cd stellar-lend
 cargo run --bin run_benchmarks
 cargo run --bin run_benchmarks -- --compare benchmarks/baseline.json
 cargo run --bin run_benchmarks -- --output my-results.json
+cargo run --bin run_benchmarks -- --threshold 5.0  # Set custom regression threshold
 ```
+
+### Environment-Agnostic Configuration
+
+The benchmark suite supports configuration via environment variables:
+
+```bash
+export BENCHMARK_REGRESSION_THRESHOLD=5.0
+export BENCHMARK_OUTPUT_JSON=custom-results.json
+export BENCHMARK_BASELINE=benchmarks/baseline.json
+cargo run --bin run_benchmarks
+```
+
+Or use the `config.toml` file in the benchmarks directory for persistent configuration.
 
 ## Output
 
-Results are written to `benchmark-results.json`:
+Results are written to multiple formats:
+
+- **JSON**: `benchmark-results.json` - Machine-readable full results
+- **Markdown**: `benchmark-results.md` - Human-readable report with tables
+- **History**: `benchmarks/history.json` - Historical trend data with git metadata
+
+### JSON Output
 
 ```json
 {
@@ -78,6 +98,25 @@ Results are written to `benchmark-results.json`:
 }
 ```
 
+### Historical Trend Storage
+
+The `benchmarks/history.json` file stores all benchmark runs with git metadata:
+
+```json
+[
+  {
+    "timestamp": "2026-04-23T...",
+    "operation": "lending::deposit",
+    "instructions": 245000,
+    "memory_bytes": 18432,
+    "git_commit": "abc123...",
+    "git_branch": "main"
+  }
+]
+```
+
+This enables tracking performance trends over time and correlating changes with specific commits.
+
 ## Gas Budgets
 
 Default budgets (instruction count limits) are defined in `src/framework.rs`. They represent conservative upper bounds — tighten them after profiling real workloads.
@@ -97,7 +136,7 @@ Default budgets (instruction count limits) are defined in `src/framework.rs`. Th
 The benchmark suite compares results against `benchmarks/baseline.json` and flags regressions when:
 
 1. **Hard budget violation**: `instructions > budget` for any operation
-2. **Relative regression**: Instructions increased by **>10%** vs baseline
+2. **Relative regression**: Instructions increased by **>5%** vs baseline (configurable)
 
 To update the baseline after an intentional optimization:
 
@@ -114,9 +153,9 @@ The `.github/workflows/gas-benchmarks.yml` workflow:
 - Runs on every PR touching `contracts/**` or `benchmarks/**`
 - Builds and runs the full benchmark suite
 - Compares against `baseline.json` if it has recorded results
-- Fails the PR if any operation exceeds its gas budget
-- Uploads `benchmark-results.json` as a CI artifact (retained 90 days)
-- Posts a summary table to the GitHub Actions step summary
+- Fails the PR if any operation exceeds its gas budget or shows >5% regression
+- Uploads `benchmark-results.json`, `benchmark-results.md`, and `benchmarks/history.json` as CI artifacts (retained 90 days)
+- Posts a summary table and full markdown report to the GitHub Actions step summary
 
 ## Edge Cases Covered
 
