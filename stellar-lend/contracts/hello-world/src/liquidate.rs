@@ -55,6 +55,9 @@ pub struct BatchLiquidationRequest {
     pub debt_asset: Option<Address>,
     pub collateral_asset: Option<Address>,
     pub debt_amount: i128,
+    /// Priority score for ordering (higher = process first).
+    /// Typically based on profit potential. 0 = use default ordering.
+    pub priority_score: u64,
 }
 
 /// Per-position result within a batch liquidation
@@ -791,11 +794,94 @@ fn update_liquidation_analytics(
     Ok(())
 }
 
+/// Sort batch liquidation requests by priority score (descending).
+///
+/// Uses insertion sort — efficient for small batches (MAX_BATCH_SIZE = 10).
+/// Requests with higher priority_score are processed first, maximizing
+/// profit potential per gas unit spent.
+fn sort_by_priority(
+    env: &Env,
+    requests: &Vec<BatchLiquidationRequest>,
+) -> Vec<BatchLiquidationRequest> {
+    let n = requests.len();
+    let mut sorted: Vec<BatchLiquidationRequest> = Vec::new(env);
+
+    for i in 0..n {
+        let item = requests.get(i).unwrap();
+        let mut insert_pos = sorted.len();
+
+        // Find insertion point (descending order by priority_score)
+        for j in 0..sorted.len() {
+            let existing = sorted.get(j).unwrap();
+            if item.priority_score > existing.priority_score {
+                insert_pos = j;
+                break;
+            }
+        }
+
+        // Insert at the correct position
+        sorted.insert(insert_pos, item);
+    }
+
+    sorted
+}
+
+/// Calculate the profit potential score for a liquidation request.
+///
+/// Higher scores indicate more profitable liquidations. The score is based on
+/// the ratio of debt to collateral and the incentive available.
+pub fn calculate_priority_score(
+    env: &Env,
+    request: &BatchLiquidationRequest,
+) -> Result<u64, LiquidationError> {
+    let position_key = DepositDataKey::Position(request.borrower.clone());
+    let position = env
+        .storage()
+        .persistent()
+        .get::<DepositDataKey, Position>(&position_key);
+
+    let Some(pos) = position else {
+        return Ok(0);
+    };
+
+    let total_debt = pos.debt.saturating_add(pos.borrow_interest);
+    if total_debt == 0 {
+        return Ok(0);
+    }
+
+    // Get collateral value
+    let collateral_key = DepositDataKey::CollateralBalance(request.borrower.clone());
+    let collateral: i128 = env
+        .storage()
+        .persistent()
+        .get::<DepositDataKey, i128>(&collateral_key)
+        .unwrap_or(0);
+
+    // Score = (collateral / debt) * 10000 — higher means more collateral to seize
+    // Also factor in the debt amount (larger liquidations are more profitable)
+    let collateral_ratio = collateral
+        .saturating_mul(10_000)
+        .checked_div(total_debt)
+        .unwrap_or(0);
+
+    // Combine ratio and absolute amount for priority
+    // Normalize debt amount to a reasonable scale (divide by 1e6)
+    let debt_scale = request.debt_amount.checked_div(1_000_000).unwrap_or(0) as u64;
+
+    let score = (collateral_ratio as u64)
+        .saturating_add(debt_scale);
+
+    Ok(score)
+}
+
 /// Liquidate multiple undercollateralized positions in a single atomic transaction.
 ///
 /// Processes up to `MAX_BATCH_SIZE` positions in one call, reducing the per-position
 /// overhead of separate transaction submissions. Per-position failures are captured in
 /// the result and do not abort the entire batch.
+///
+/// Requests are sorted by priority_score (descending) before processing,
+/// ensuring the most profitable liquidations are executed first.
 ///
 /// Authorization and rate-limiting are applied once in the contract entry point
 /// (`lib.rs`), not here.
@@ -811,6 +897,9 @@ pub fn batch_liquidate(
         return Err(LiquidationError::InvalidAmount);
     }
 
+    // Sort by priority (most profitable first)
+    let sorted_requests = sort_by_priority(env, &requests);
+
     let timestamp = env.ledger().timestamp();
     let mut results: Vec<BatchLiquidationResult> = Vec::new(env);
     let mut total_debt_liquidated: i128 = 0;
@@ -818,9 +907,9 @@ pub fn batch_liquidate(
     let mut successful: u32 = 0;
     let mut failed: u32 = 0;
 
-    let n = requests.len();
+    let n = sorted_requests.len();
     for i in 0..n {
-        let req = requests.get(i).unwrap();
+        let req = sorted_requests.get(i).unwrap();
         let outcome = liquidate(
             env,
             liquidator.clone(),

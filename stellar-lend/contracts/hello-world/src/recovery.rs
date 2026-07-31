@@ -3,9 +3,10 @@ use soroban_sdk::{Address, Env, Vec};
 
 use crate::governance::{
     emit_guardian_added_event, emit_guardian_removed_event, emit_recovery_approved_event,
-    emit_recovery_executed_event, emit_recovery_started_event, GovernanceDataKey, GovernanceError,
-    RecoveryRequest,
+    emit_recovery_cancelled_event, emit_recovery_executed_event, emit_recovery_started_event,
+    GovernanceDataKey, GovernanceError, RecoveryRequest,
 };
+use crate::types::DEFAULT_RECOVERY_DELAY;
 
 const DEFAULT_RECOVERY_PERIOD: u64 = 3 * 24 * 60 * 60;
 
@@ -168,6 +169,12 @@ pub fn start_recovery(
         initiator: initiator.clone(),
         initiated_at: now,
         expires_at: now + DEFAULT_RECOVERY_PERIOD,
+        // #675 — fixed delay from initiation, independent of when guardian
+        // approvals come in. Gives the account owner (or any guardian) a
+        // guaranteed minimum window to notice and cancel a fraudulent or
+        // mistaken recovery attempt before it can execute, regardless of
+        // how quickly the approval threshold is reached.
+        ready_at: now + DEFAULT_RECOVERY_DELAY,
     };
 
     env.storage()
@@ -243,6 +250,12 @@ pub fn execute_recovery(env: &Env, executor: Address) -> Result<(), GovernanceEr
         return Err(GovernanceError::ProposalExpired);
     }
 
+    // #675 — recovery delay: even with enough approvals, execution cannot
+    // happen before `ready_at`. This is the actual cancellation window.
+    if now < recovery.ready_at {
+        return Err(GovernanceError::RecoveryNotReady);
+    }
+
     let threshold: u32 = env
         .storage()
         .persistent()
@@ -284,6 +297,44 @@ pub fn execute_recovery(env: &Env, executor: Address) -> Result<(), GovernanceEr
         .remove(&GovernanceDataKey::RecoveryApprovals);
 
     emit_recovery_executed_event(env, &recovery.old_admin, &recovery.new_admin, &executor);
+    Ok(())
+}
+
+/// #675 — cancel a pending recovery request during the delay/pending window.
+/// Callable by the account being protected (`recovery.old_admin`) or by any
+/// guardian, so a fraudulent or mistaken recovery attempt can be stopped by
+/// either the legitimate owner noticing it, or a guardian who didn't approve
+/// it flagging it. Once cancelled, the request and its approvals are cleared
+/// entirely — a new recovery must be started fresh.
+pub fn cancel_recovery(env: &Env, caller: Address) -> Result<(), GovernanceError> {
+    caller.require_auth();
+
+    let recovery: RecoveryRequest = env
+        .storage()
+        .persistent()
+        .get(&GovernanceDataKey::RecoveryRequest)
+        .ok_or(GovernanceError::NoRecoveryInProgress)?;
+
+    let is_protected_account = caller == recovery.old_admin;
+    let is_guardian = env
+        .storage()
+        .persistent()
+        .get::<_, Vec<Address>>(&GovernanceDataKey::Guardians)
+        .map(|guardians| guardians.contains(caller.clone()))
+        .unwrap_or(false);
+
+    if !is_protected_account && !is_guardian {
+        return Err(GovernanceError::Unauthorized);
+    }
+
+    env.storage()
+        .persistent()
+        .remove(&GovernanceDataKey::RecoveryRequest);
+    env.storage()
+        .persistent()
+        .remove(&GovernanceDataKey::RecoveryApprovals);
+
+    emit_recovery_cancelled_event(env, &recovery.old_admin, &recovery.new_admin, &caller);
     Ok(())
 }
 
