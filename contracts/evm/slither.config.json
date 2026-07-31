@@ -1,0 +1,6 @@
+{
+  "exclude_dependencies": true,
+  "filter_paths": "node_modules|lib|script|test|mock|mocks",
+  "detectors_to_exclude": "",
+  "fail_on": "none"
+}

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import path from 'path';
 
 export default defineConfig({
     test: {
@@ -16,6 +17,18 @@ export default defineConfig({
                 branches: 85,
                 statements: 80,
             },
+        },
+    },
+    resolve: {
+        alias: {
+            '@/claims': path.resolve(__dirname, './src/claims'),
+            '@/config': path.resolve(__dirname, './src/config'),
+            '@/devtools': path.resolve(__dirname, './src/devtools'),
+            '@/providers': path.resolve(__dirname, './src/providers'),
+            '@/security': path.resolve(__dirname, './src/security'),
+            '@/services': path.resolve(__dirname, './src/services'),
+            '@/types': path.resolve(__dirname, './src/types'),
+            '@/utils': path.resolve(__dirname, './src/utils'),
         },
     },
 });

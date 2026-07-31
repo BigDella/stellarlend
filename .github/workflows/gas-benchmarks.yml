@@ -21,6 +21,9 @@ on:
         description: "Compare against baseline and enforce the 10% regression gate"
         required: false
         default: "true"
+=======
+on: workflow_dispatch
+>>>>>>> main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -94,6 +97,42 @@ jobs:
           if [ -f "$BENCHMARK_DASHBOARD" ]; then
             cat "$BENCHMARK_DASHBOARD" >> "$GITHUB_STEP_SUMMARY"
           fi
+          cd stellar-lend
+          if [ -f benchmark-results.json ]; then
+            echo "## Gas Benchmark Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| Contract | Operations | Max Instructions | Avg Instructions | Over Budget |" >> $GITHUB_STEP_SUMMARY
+            echo "|----------|-----------|-----------------|-----------------|-------------|" >> $GITHUB_STEP_SUMMARY
+            python3 - <<'EOF'
+          import json, os
+
+          with open("benchmark-results.json") as f:
+              report = json.load(f)
+
+          summary = report.get("summary_by_contract", {})
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              for contract, s in sorted(summary.items()):
+                  over = s.get("over_budget_count", 0)
+                  status = "✗" if over > 0 else "✓"
+                  out.write(
+                      f"| {contract} | {s['total_operations']} | "
+                      f"{s['max_instructions']:,} | {s['avg_instructions']:,} | "
+                      f"{status} {over} |\n"
+                  )
+
+              total = report["total_benchmarks"]
+              passed = report["passed"]
+              failed = report["failed"]
+              out.write(f"\n**Total:** {total} | **Passed:** {passed} | **Failed:** {failed}\n")
+          EOF
+          
+          # Also append markdown report to summary if available
+          if [ -f benchmark-results.md ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            cat benchmark-results.md >> $GITHUB_STEP_SUMMARY
+          fi
+          fi
 
       - name: Upload benchmark artifacts
         if: always()
@@ -104,6 +143,8 @@ jobs:
             stellar-lend/benchmark-results.json
             stellar-lend/benchmark-dashboard.md
             stellar-lend/benchmark-history.jsonl
+            stellar-lend/benchmark-results.md
+            stellar-lend/benchmarks/history.json
             stellar-lend/benchmark-output.log
             stellar-lend/benchmark-build.log
           if-no-files-found: warn

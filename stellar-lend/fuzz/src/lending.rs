@@ -111,7 +111,7 @@ impl LendingHarness {
     }
 
     fn act(&self, client: &LendingContractClient<'_>, action: ActionBytes) {
-        match action.kind() % 10 {
+        match action.kind() % 11 {
             // 0: deposit(vault)
             0 => {
                 let user = self.user(action.user());
@@ -155,8 +155,23 @@ impl LendingHarness {
                 let amt = i128::from(action.i64_a());
                 let _ = client.try_deposit_collateral(&user, &asset, &amt);
             }
-            // 5: set_pause
+            // 5: liquidate
             5 => {
+                let liquidator = self.user(action.user());
+                let borrower = self.user(action.asset_a());
+                let debt_asset = self.asset(action.asset_b());
+                let collateral_asset = self.asset(action.user());
+                let amt = i128::from(action.i64_b());
+                let _ = client.try_liquidate(
+                    &liquidator,
+                    &borrower,
+                    &debt_asset,
+                    &collateral_asset,
+                    &amt,
+                );
+            }
+            // 6: set_pause
+            6 => {
                 let pause_type = match action.u32_param() % 5 {
                     0 => PauseType::Deposit,
                     1 => PauseType::Borrow,
@@ -167,23 +182,23 @@ impl LendingHarness {
                 let paused = (action.u64_tail() & 1) == 1;
                 let _ = client.try_set_pause(&self.admin, &pause_type, &paused);
             }
-            // 6: set_liquidation_threshold_bps
-            6 => {
+            // 7: set_liquidation_threshold_bps
+            7 => {
                 let bps = (action.i64_a().unsigned_abs() as i128) % 20_000;
                 let _ = client.try_set_liquidation_threshold_bps(&self.admin, &bps);
             }
-            // 7: oracle set_price
-            7 => {
+            // 8: oracle set_price
+            8 => {
                 let asset = self.asset(action.asset_a());
                 self.set_oracle_price(&asset, action.i64_a());
             }
-            // 8: advance time
-            8 => {
+            // 9: advance time
+            9 => {
                 // Cap to ~1 year per step to keep things reasonable.
                 let delta = action.u64_tail() % 31_536_000;
                 self.set_time_delta(delta);
             }
-            // 9: call views/getters
+            // 10: call views/getters
             _ => {
                 let user = self.user(action.user());
                 let _ = client.get_user_position(&user);

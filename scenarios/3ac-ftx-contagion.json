@@ -1,0 +1,26 @@
+{
+  "id": "3ac-ftx-contagion",
+  "name": "3AC/FTX Contagion Event",
+  "description": "Major crypto hedge fund and exchange insolvencies trigger cascading liquidations across DeFi lending protocols.",
+  "category": "historical",
+  "version": "1.0.0",
+  "created": "2024-01-01T00:00:00Z",
+  "priceChanges": [
+    { "asset": "XLM", "changePercent": -30 },
+    { "asset": "BTC", "changePercent": -25 },
+    { "asset": "ETH", "changePercent": -30 },
+    { "asset": "USDC", "changePercent": -3 }
+  ],
+  "correlationShifts": [
+    { "asset1": "XLM", "asset2": "BTC", "newCorrelation": 0.8 },
+    { "asset1": "XLM", "asset2": "ETH", "newCorrelation": 0.85 },
+    { "asset1": "BTC", "asset2": "ETH", "newCorrelation": 0.85 }
+  ],
+  "volatilityMultipliers": [
+    { "asset": "XLM", "multiplier": 4.5 },
+    { "asset": "BTC", "multiplier": 3.5 },
+    { "asset": "ETH", "multiplier": 4.0 }
+  ],
+  "cascadingLiquidation": true,
+  "tags": ["contagion", "counterparty-risk", "exchange-risk"]
+}

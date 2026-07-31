@@ -37,7 +37,7 @@ use crate::events::{
     DataStoreBackupEvent, DataStoreInitEvent, DataStoreMigrateEvent, DataStoreRestoreEvent,
     DataStoreSaveEvent, DataStoreWriterChangeEvent,
 };
-
+use crate::reentrancy::{ReentrancyGuard, ReentrancyKey};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Bytes, Env,
     String, Vec,
@@ -149,12 +149,18 @@ impl DataStore {
     /// `admin` must sign the transaction.
     #[allow(deprecated)]
     pub fn init(env: Env, admin: Address) {
+        // CHECKS-EFFECTS-INTERACTIONS PATTERN
+        // 1. CHECKS: Reentrancy guard (constructor protection), authorization
+        let _guard = ReentrancyGuard::new_constructor(&env)
+            .unwrap_or_else(|_| panic!("Constructor reentrancy detected"));
+
         admin.require_auth();
 
         if env.storage().persistent().has(&StoreKey::Admin) {
             panic_with_error!(&env, DataStoreError::AlreadyInitialized);
         }
 
+        // 2. EFFECTS: Update state before any external interactions
         env.storage().persistent().set(&StoreKey::Admin, &admin);
         env.storage()
             .persistent()
@@ -170,6 +176,7 @@ impl DataStore {
             .persistent()
             .set(&StoreKey::KeyIndex, &key_index);
 
+        // 3. INTERACTIONS: Emit events
         DataStoreInitEvent {
             admin: admin.clone(),
         }
@@ -186,9 +193,15 @@ impl DataStore {
     /// Only the admin may grant writers.
     #[allow(deprecated)]
     pub fn grant_writer(env: Env, caller: Address, writer: Address) {
+        // CHECKS-EFFECTS-INTERACTIONS PATTERN
+        // 1. CHECKS: Reentrancy guard, authorization
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .unwrap_or_else(|_| panic!("Reentrancy detected"));
+
         caller.require_auth();
         Self::assert_admin(&env, &caller);
 
+        // 2. EFFECTS: Update state before any external interactions
         let mut writers: Vec<Address> = env
             .storage()
             .persistent()
@@ -201,6 +214,7 @@ impl DataStore {
             env.storage().persistent().set(&StoreKey::Writers, &writers);
         }
 
+        // 3. INTERACTIONS: Emit events
         DataStoreWriterChangeEvent {
             caller: caller.clone(),
             writer: writer.clone(),
@@ -214,9 +228,15 @@ impl DataStore {
     /// Only the admin may revoke writers.
     #[allow(deprecated)]
     pub fn revoke_writer(env: Env, caller: Address, writer: Address) {
+        // CHECKS-EFFECTS-INTERACTIONS PATTERN
+        // 1. CHECKS: Reentrancy guard, authorization
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .unwrap_or_else(|_| panic!("Reentrancy detected"));
+
         caller.require_auth();
         Self::assert_admin(&env, &caller);
 
+        // 2. EFFECTS: Update state before any external interactions
         let writers: Vec<Address> = env
             .storage()
             .persistent()
@@ -233,6 +253,7 @@ impl DataStore {
             .persistent()
             .set(&StoreKey::Writers, &new_writers);
 
+        // 3. INTERACTIONS: Emit events
         DataStoreWriterChangeEvent {
             caller: caller.clone(),
             writer: writer.clone(),
@@ -265,6 +286,11 @@ impl DataStore {
     /// `caller` must sign the transaction.
     #[allow(deprecated)]
     pub fn data_save(env: Env, caller: Address, key: String, value: Bytes) {
+        // CHECKS-EFFECTS-INTERACTIONS PATTERN
+        // 1. CHECKS: Reentrancy guard, authorization, validation
+        let _guard = ReentrancyGuard::new_with_key(&env, ReentrancyKey::GlobalLock, false)
+            .unwrap_or_else(|_| panic!("Reentrancy detected"));
+
         caller.require_auth();
         Self::assert_initialized(&env);
         Self::assert_can_write(&env, &caller);
@@ -292,6 +318,7 @@ impl DataStore {
                 panic_with_error!(&env, DataStoreError::StoreFull);
             }
 
+            // 2. EFFECTS: Update state before any external interactions
             // Update key index
             let mut key_index: Vec<String> = env
                 .storage()
@@ -310,6 +337,7 @@ impl DataStore {
 
         env.storage().persistent().set(&store_key, &value);
 
+        // 3. INTERACTIONS: Emit events
         DataStoreSaveEvent {
             caller: caller.clone(),
             key: key.clone(),

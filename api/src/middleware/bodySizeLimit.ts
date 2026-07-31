@@ -33,7 +33,7 @@ function parseSizeLimit(limit: string): number {
     return 100 * 1024;
   }
 
-  const value = parseFloat(match[1]);
+  const value = parseFloat(match[1]!);
   const unit = match[2] || 'b';
 
   switch (unit) {

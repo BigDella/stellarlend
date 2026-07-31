@@ -1,6 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env};
+use stellarlend_shared_deadline::require_strict_deadline;
 
 #[contract]
 pub struct DelegationRegistry;
@@ -37,12 +38,8 @@ enum DataKey {
     Delegation(Address, Address),
 }
 
-fn now(env: &Env) -> u64 {
-    env.ledger().timestamp()
-}
-
 fn delegation_valid(env: &Env, d: &Delegation, required_permission: u32) -> bool {
-    if d.expiry != 0 && d.expiry <= now(env) {
+    if require_strict_deadline(env, d.expiry, ()).is_err() {
         return false;
     }
     (d.permissions & required_permission) != 0
@@ -58,10 +55,13 @@ impl DelegationRegistry {
         expiry: u64,
     ) -> Result<(), DelegationError> {
         delegator.require_auth();
-        if expiry != 0 && expiry <= now(&env) {
+        if require_strict_deadline(&env, expiry, ()).is_err() {
             return Err(DelegationError::InvalidExpiry);
         }
-        let d = Delegation { permissions, expiry };
+        let d = Delegation {
+            permissions,
+            expiry,
+        };
         env.storage()
             .persistent()
             .set(&DataKey::Delegation(delegator, delegate), &d);
@@ -82,12 +82,7 @@ impl DelegationRegistry {
             .get(&DataKey::Delegation(delegator, delegate))
     }
 
-    pub fn validate(
-        env: Env,
-        delegator: Address,
-        delegate: Address,
-        permission: u32,
-    ) -> bool {
+    pub fn validate(env: Env, delegator: Address, delegate: Address, permission: u32) -> bool {
         let d: Option<Delegation> = Self::get(env.clone(), delegator, delegate);
         match d {
             Some(d) => delegation_valid(&env, &d, permission),

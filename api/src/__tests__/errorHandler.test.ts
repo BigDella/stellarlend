@@ -17,11 +17,12 @@ describe('Error Handler Middleware', () => {
     mockRequest = {
       path: '/api/test',
       method: 'POST',
-    };
+      headers: {},
+    } as Partial<Request>;
     mockResponse = {
       status: jest.fn().mockReturnThis(),
       json: jest.fn().mockReturnThis(),
-    };
+    } as Partial<Response>;
     mockNext = jest.fn();
   });
 
@@ -31,11 +32,10 @@ describe('Error Handler Middleware', () => {
     errorHandler(error, mockRequest as Request, mockResponse as Response, mockNext);
 
     expect(mockResponse.status).toHaveBeenCalledWith(400);
-    expect(mockResponse.json).toHaveBeenCalledWith({
+    expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      error: 'Invalid input',
-      code: 'VALIDATION_ERROR',
-    });
+      error: expect.objectContaining({ code: 'VALIDATION_ERROR', message: 'Invalid input' }),
+    }));
   });
 
   it('should handle UnauthorizedError', () => {
@@ -44,11 +44,10 @@ describe('Error Handler Middleware', () => {
     errorHandler(error, mockRequest as Request, mockResponse as Response, mockNext);
 
     expect(mockResponse.status).toHaveBeenCalledWith(401);
-    expect(mockResponse.json).toHaveBeenCalledWith({
+    expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      error: 'Unauthorized',
-      code: 'UNAUTHORIZED',
-    });
+      error: expect.objectContaining({ code: 'UNAUTHORIZED', message: 'Unauthorized' }),
+    }));
   });
 
   it('should handle NotFoundError with correct status code and error code', () => {
@@ -57,11 +56,10 @@ describe('Error Handler Middleware', () => {
     errorHandler(error, mockRequest as Request, mockResponse as Response, mockNext);
 
     expect(mockResponse.status).toHaveBeenCalledWith(404);
-    expect(mockResponse.json).toHaveBeenCalledWith({
+    expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      error: 'Resource not found',
-      code: 'NOT_FOUND',
-    });
+      error: expect.objectContaining({ code: 'NOT_FOUND', message: 'Resource not found' }),
+    }));
   });
 
   it('should handle ConflictError with correct status code and error code', () => {
@@ -70,11 +68,10 @@ describe('Error Handler Middleware', () => {
     errorHandler(error, mockRequest as Request, mockResponse as Response, mockNext);
 
     expect(mockResponse.status).toHaveBeenCalledWith(409);
-    expect(mockResponse.json).toHaveBeenCalledWith({
+    expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      error: 'Resource already exists',
-      code: 'CONFLICT',
-    });
+      error: expect.objectContaining({ code: 'CONFLICT', message: 'Resource already exists' }),
+    }));
   });
 
   it('should handle InternalServerError with correct status code and error code', () => {
@@ -83,11 +80,10 @@ describe('Error Handler Middleware', () => {
     errorHandler(error, mockRequest as Request, mockResponse as Response, mockNext);
 
     expect(mockResponse.status).toHaveBeenCalledWith(500);
-    expect(mockResponse.json).toHaveBeenCalledWith({
+    expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      error: 'Something went wrong',
-      code: 'INTERNAL_SERVER_ERROR',
-    });
+      error: expect.objectContaining({ code: 'INTERNAL_SERVER_ERROR', message: 'Something went wrong' }),
+    }));
   });
 
   it('should handle generic errors with 500 status and INTERNAL_SERVER_ERROR code', () => {
@@ -96,11 +92,10 @@ describe('Error Handler Middleware', () => {
     errorHandler(error, mockRequest as Request, mockResponse as Response, mockNext);
 
     expect(mockResponse.status).toHaveBeenCalledWith(500);
-    expect(mockResponse.json).toHaveBeenCalledWith({
+    expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      error: 'Internal server error',
-      code: 'INTERNAL_SERVER_ERROR',
-    });
+      error: expect.objectContaining({ code: 'INTERNAL_SERVER_ERROR', message: 'Internal server error' }),
+    }));
   });
 
   it('should handle SyntaxError with 400 status and VALIDATION_ERROR code', () => {
@@ -109,10 +104,9 @@ describe('Error Handler Middleware', () => {
     errorHandler(error, mockRequest as Request, mockResponse as Response, mockNext);
 
     expect(mockResponse.status).toHaveBeenCalledWith(400);
-    expect(mockResponse.json).toHaveBeenCalledWith({
+    expect(mockResponse.json).toHaveBeenCalledWith(expect.objectContaining({
       success: false,
-      error: 'Invalid JSON',
-      code: 'VALIDATION_ERROR',
-    });
+      error: expect.objectContaining({ code: 'VALIDATION_ERROR', message: 'Invalid JSON' }),
+    }));
   });
 });

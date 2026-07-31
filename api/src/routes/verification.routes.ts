@@ -26,24 +26,51 @@ const router: Router = Router();
  *     responses:
  *       200:
  *         description: Verification result
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 verified:
- *                   type: boolean
- *                 contractId:
- *                   type: string
- *                 network:
- *                   type: string
- *                 message:
- *                   type: string
  *       400:
  *         description: Bad request
  *       500:
  *         description: Verification error
  */
 router.get('/', verificationController.verifyContract);
+
+/**
+ * @openapi
+ * /verification/kyc:
+ *   post:
+ *     summary: Submit KYC/AML verification and create an attestation
+ *     tags:
+ *       - Verification
+ */
+router.post('/kyc', verificationController.submitKycVerification);
+
+/**
+ * @openapi
+ * /verification/kyc/{userAddress}:
+ *   get:
+ *     summary: Get KYC/AML verification status for a user
+ *     tags:
+ *       - Verification
+ */
+router.get('/kyc/:userAddress', verificationController.getKycStatus);
+
+/**
+ * @openapi
+ * /verification/kyc/{userAddress}/proof:
+ *   get:
+ *     summary: Return a privacy-preserving proof summary without PII
+ *     tags:
+ *       - Verification
+ */
+router.get('/kyc/:userAddress/proof', verificationController.getPrivacyProof);
+
+/**
+ * @openapi
+ * /verification/kyc/{userAddress}/revoke:
+ *   post:
+ *     summary: Revoke an existing verification attestation
+ *     tags:
+ *       - Verification
+ */
+router.post('/kyc/:userAddress/revoke', verificationController.revokeKycAttestation);
 
 export default router;

@@ -20,7 +20,7 @@ describe('requestIdMiddleware', () => {
   it('should generate a new UUID if x-request-id header is not present', () => {
     requestIdMiddleware(mockRequest as Request, mockResponse as Response, nextFunction);
 
-    expect(mockRequest.id).toBeDefined();
+    expect((mockRequest as any).id).toBeDefined();
     expect(typeof mockRequest.id).toBe('string');
     expect(mockRequest.id?.length).toBeGreaterThan(0);
     expect(mockResponse.setHeader).toHaveBeenCalledWith('x-request-id', mockRequest.id);
