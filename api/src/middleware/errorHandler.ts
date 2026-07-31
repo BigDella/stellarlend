@@ -1,9 +1,19 @@
 import { Request, Response, NextFunction } from 'express';
-import { ApiError, ErrorCode } from '../utils/errors';
+import { ApiError, ErrorCode, type ErrorResponse } from '../utils/errors';
 import logger from '../utils/logger';
 
+/**
+ * Generate a request ID from the request or create a new one
+ */
+function getRequestId(req: Request): string {
+  return (req.headers['x-request-id'] as string) || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
 export const errorHandler = (err: Error, req: Request, res: Response, next: NextFunction) => {
+  const requestId = getRequestId(req);
+
   logger.error('Error occurred:', {
+    requestId,
     error: err.message,
     stack: err.stack,
     path: req.path,
@@ -11,24 +21,38 @@ export const errorHandler = (err: Error, req: Request, res: Response, next: Next
   });
 
   if (err instanceof SyntaxError) {
-    return res.status(400).json({
+    const errorResponse: ErrorResponse = {
       success: false,
-      error: 'Invalid JSON',
-      code: ErrorCode.VALIDATION_ERROR,
-    });
+      error: {
+        code: ErrorCode.VALIDATION_ERROR,
+        message: 'Invalid JSON',
+        details: { syntax: true },
+      },
+      requestId,
+    };
+    return res.status(400).json(errorResponse);
   }
 
   if (err instanceof ApiError) {
-    return res.status(err.statusCode).json({
+    const errorResponse: ErrorResponse = {
       success: false,
-      error: err.message,
-      code: err.code,
-    });
+      error: {
+        code: err.code,
+        message: err.message,
+        ...(err.details ? { details: err.details } : {}),
+      },
+      requestId,
+    };
+    return res.status(err.statusCode).json(errorResponse);
   }
 
-  return res.status(500).json({
+  const errorResponse: ErrorResponse = {
     success: false,
-    error: 'Internal server error',
-    code: ErrorCode.INTERNAL_SERVER_ERROR,
-  });
+    error: {
+      code: ErrorCode.INTERNAL_SERVER_ERROR,
+      message: 'Internal server error',
+    },
+    requestId,
+  };
+  return res.status(500).json(errorResponse);
 };

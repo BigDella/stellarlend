@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# StellarLend pre-commit hook
+# Runs lint-staged to check only staged files.
+# Bypass with: git commit --no-verify
+
+. "$(dirname -- "$0")/_/husky.sh"
+
+npx lint-staged

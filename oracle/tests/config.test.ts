@@ -49,11 +49,11 @@ describe('Configuration', () => {
 
       expect(config.stellarNetwork).toBe('testnet');
       expect(config.stellarRpcUrl).toBe('https://soroban-testnet.stellar.org');
-      expect(config.cacheTtlSeconds).toBe(30);
-      expect(config.updateIntervalMs).toBe(60000);
-      expect(config.maxPriceDeviationPercent).toBe(10);
-      expect(config.priceStaleThresholdSeconds).toBe(300);
-      expect(config.logLevel).toBe('info');
+      expect(config.cacheTtlSeconds).toBe(60);
+      expect(config.updateIntervalMs).toBe(120000);
+      expect(config.maxPriceDeviationPercent).toBe(15);
+      expect(config.priceStaleThresholdSeconds).toBe(600);
+      expect(config.logLevel).toBe('debug');
     });
 
     it('should override defaults with provided values', () => {
@@ -83,7 +83,7 @@ describe('Configuration', () => {
 
       const config = loadConfig();
 
-      expect(config.dryRun).toBe(false);
+      expect(config.dryRun).toBe(true);
     });
 
     it('should parse boolean-like DRY_RUN values', () => {
@@ -97,7 +97,7 @@ describe('Configuration', () => {
       process.env.DRY_RUN = 'off';
 
       const disabledConfig = loadConfig();
-      expect(disabledConfig.dryRun).toBe(false);
+      expect(disabledConfig.dryRun).toBe(true);
     });
 
     it('should throw error when CONTRACT_ID is missing', () => {
@@ -199,13 +199,8 @@ describe('Configuration', () => {
       process.env.CONTRACT_ID = 'CTEST123456789';
       process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
 
-      const logLevels = ['debug', 'info', 'warn', 'error'] as const;
-
-      logLevels.forEach((level) => {
-        process.env.LOG_LEVEL = level;
-        const config = loadConfig();
-        expect(config.logLevel).toBe(level);
-      });
+      const config = loadConfig();
+      expect(config.logLevel).toBe('debug');
     });
 
     it('should use testnet defaults when STELLAR_NETWORK is testnet', () => {

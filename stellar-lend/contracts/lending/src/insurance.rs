@@ -8,7 +8,7 @@
 //! - Maintains an emergency fund allocation
 //! - Exposes analytics for pool health monitoring
 
-use soroban_sdk::{contractevent, contracttype, Address, Env};
+use soroban_sdk::{contractevent, contracttype, Address, Env, Vec};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -78,6 +78,8 @@ pub enum InsuranceKey {
     Claim(u64),
     /// Next claim ID counter
     NextClaimId,
+    /// List of all claim IDs for history iteration
+    ClaimsList,
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -157,6 +159,21 @@ pub struct InsurancePremiumCollectedEvent {
     pub payer: Address,
     pub asset: Address,
     pub premium: i128,
+    pub timestamp: u64,
+}
+
+#[contractevent(topics = ["ins_claim_cancelled"])]
+#[derive(Clone, Debug)]
+pub struct InsuranceClaimCancelledEvent {
+    pub claim_id: u64,
+    pub claimant: Address,
+    pub timestamp: u64,
+}
+
+#[contractevent(topics = ["ins_claim_history_cleared"])]
+#[derive(Clone, Debug)]
+pub struct InsuranceClaimHistoryClearedEvent {
+    pub admin: Address,
     pub timestamp: u64,
 }
 
@@ -418,6 +435,17 @@ pub fn submit_claim(
     };
     save_claim(env, &claim);
 
+    // Track in claims list for history
+    let mut all_ids: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&InsuranceKey::ClaimsList)
+        .unwrap_or_else(|| Vec::new(env));
+    all_ids.push_back(id);
+    env.storage()
+        .persistent()
+        .set(&InsuranceKey::ClaimsList, &all_ids);
+
     InsuranceClaimSubmittedEvent {
         claim_id: id,
         claimant,
@@ -507,6 +535,54 @@ pub fn set_coverage_limit(
     .publish(env);
 
     Ok(())
+}
+
+/// Cancel a pending claim (claimant only).
+pub fn cancel_claim(env: &Env, claimant: Address, claim_id: u64) -> Result<(), InsuranceError> {
+    claimant.require_auth();
+
+    let mut claim = get_claim(env, claim_id).ok_or(InsuranceError::ClaimNotFound)?;
+
+    if claim.claimant != claimant {
+        return Err(InsuranceError::Unauthorized);
+    }
+
+    if claim.status != ClaimStatus::Pending {
+        return Err(InsuranceError::ClaimNotPending);
+    }
+
+    claim.status = ClaimStatus::Rejected;
+    claim.resolved_at = env.ledger().timestamp();
+    save_claim(env, &claim);
+
+    InsuranceClaimCancelledEvent {
+        claim_id,
+        claimant,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Get all claim IDs for history tracking.
+pub fn get_all_claim_ids(env: &Env) -> Vec<u64> {
+    env.storage()
+        .persistent()
+        .get(&InsuranceKey::ClaimsList)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Get all claims (full history).
+pub fn get_all_claims(env: &Env) -> Vec<InsuranceClaim> {
+    let ids: Vec<u64> = get_all_claim_ids(env);
+    let mut claims = Vec::new(env);
+    for id in ids.iter() {
+        if let Some(claim) = get_claim(env, id) {
+            claims.push_back(claim);
+        }
+    }
+    claims
 }
 
 /// Get a claim by ID.

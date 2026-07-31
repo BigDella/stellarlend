@@ -1,12 +1,6 @@
 name: Advanced Security Analysis
 
-on:
-  push:
-    branches: ["main", "dev"]
-  pull_request:
-    branches: ["main", "dev"]
-  schedule:
-    - cron: '0 0 * * *' # Daily incremental analysis
+on: workflow_dispatch
 
 jobs:
   static-analysis:

@@ -151,7 +151,7 @@ export abstract class BasePriceProvider {
         return;
       }
 
-      const earliest = this.requestTimestamps[0];
+      const earliest = this.requestTimestamps[0]!;
       const waitTime = Math.max(0, earliest + windowMs - now + 1);
       logger.warn(`Rate limit reached for ${this.name}, waiting ${waitTime}ms`);
       await this.sleep(waitTime);

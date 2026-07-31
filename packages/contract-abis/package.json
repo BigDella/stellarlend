@@ -1,0 +1,48 @@
+{
+  "name": "@stellarlend/contract-abis",
+  "version": "0.1.0",
+  "description": "Auto-generated ABI definitions and type-safe client bindings for StellarLend Soroban smart contracts",
+  "license": "MIT",
+  "author": "StellarLend Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stellarlend/stellarlend",
+    "directory": "packages/contract-abis"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./abi/*": "./abi/*"
+  },
+  "files": [
+    "dist",
+    "abi",
+    "src"
+  ],
+  "scripts": {
+    "extract": "../../scripts/abi-extractor/extract.sh",
+    "generate": "node ../../scripts/abi-extractor/generate-types.js",
+    "version:check": "../../scripts/abi-extractor/version.sh --dry-run",
+    "version:bump": "../../scripts/abi-extractor/version.sh",
+    "build": "tsc --project tsconfig.json",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  },
+  "keywords": [
+    "stellar",
+    "soroban",
+    "abi",
+    "smart-contracts",
+    "type-definitions",
+    "stellarlend"
+  ]
+}

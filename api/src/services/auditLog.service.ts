@@ -72,7 +72,7 @@ class AuditLogService {
     beforeState?: Record<string, unknown>;
     afterState?: Record<string, unknown>;
   }): AuditLogEntry {
-    const prevHash = this.entries.length > 0 ? this.entries[this.entries.length - 1].hash : '0';
+    const prevHash = this.entries.length > 0 ? (this.entries[this.entries.length - 1]?.hash ?? '0') : '0';
 
     const seq = ++this.sequence;
     const entry: Omit<AuditLogEntry, 'hash'> = {
@@ -149,7 +149,7 @@ class AuditLogService {
   verify(): AuditLogVerifyResult {
     let prevHash = '0';
     for (let i = 0; i < this.entries.length; i++) {
-      const entry = this.entries[i];
+      const entry = this.entries[i]!;
       const { hash, ...fields } = entry;
       const expected = hashEntry(prevHash, fields);
       if (expected !== hash) {

@@ -1,8 +1,12 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Ledger}, vec, Address, Env, String, symbol_short};
-use crate::types::{Transaction, ProposalStatus};
+use crate::types::{ProposalStatus, Transaction};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Ledger},
+    vec, Address, Env, String,
+};
 
 #[test]
 fn test_initialize() {
@@ -10,7 +14,7 @@ fn test_initialize() {
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
     let admins = vec![&env, admin1.clone(), admin2.clone()];
-    
+
     let contract_id = env.register_contract(None, InstitutionalWallet);
     let client = InstitutionalWalletClient::new(&env, &contract_id);
 
@@ -26,7 +30,7 @@ fn test_propose_and_approve() {
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
     let admins = vec![&env, admin1.clone(), admin2.clone()];
-    
+
     let contract_id = env.register_contract(None, InstitutionalWallet);
     let client = InstitutionalWalletClient::new(&env, &contract_id);
 
@@ -38,13 +42,9 @@ fn test_propose_and_approve() {
         args: vec![&env],
     };
     let batch = vec![&env, tx];
-    
+
     env.mock_all_auths();
-    let proposal_id = client.propose(
-        &admin1,
-        &String::from_str(&env, "Test proposal"),
-        &batch,
-    );
+    let proposal_id = client.propose(&admin1, &String::from_str(&env, "Test proposal"), &batch);
 
     let proposal = client.get_proposal(&proposal_id).unwrap();
     assert_eq!(proposal.status, ProposalStatus::Active);
@@ -64,7 +64,7 @@ fn test_execute_insufficient_approvals() {
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
     let admins = vec![&env, admin1.clone(), admin2.clone()];
-    
+
     let contract_id = env.register_contract(None, InstitutionalWallet);
     let client = InstitutionalWalletClient::new(&env, &contract_id);
 
@@ -76,13 +76,9 @@ fn test_execute_insufficient_approvals() {
         args: vec![&env],
     };
     let batch = vec![&env, tx];
-    
+
     env.mock_all_auths();
-    let proposal_id = client.propose(
-        &admin1,
-        &String::from_str(&env, "Test proposal"),
-        &batch,
-    );
+    let proposal_id = client.propose(&admin1, &String::from_str(&env, "Test proposal"), &batch);
 
     // Try to execute with only 1 approval (proposer's)
     client.execute(&admin1, &proposal_id);
@@ -96,18 +92,18 @@ fn test_execute_success() {
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
     let admins = vec![&env, admin1.clone(), admin2.clone()];
-    
+
     let contract_id = env.register_contract(None, InstitutionalWallet);
     let client = InstitutionalWalletClient::new(&env, &contract_id);
 
     client.initialize(&admins, &2);
 
     // Mock a target contract for execution
-    // (For simplicity in this test, we'll just check that it doesn't fail 
+    // (For simplicity in this test, we'll just check that it doesn't fail
     // when calling a dummy address, although it would in a real environment
-    // without a contract registered there. But Soroban host might error if 
+    // without a contract registered there. But Soroban host might error if
     // address has no contract. Let's register a dummy one.)
-    
+
     #[contract]
     pub struct DummyTarget;
     #[contractimpl]
@@ -122,12 +118,8 @@ fn test_execute_success() {
         args: vec![&env],
     };
     let batch = vec![&env, tx];
-    
-    let proposal_id = client.propose(
-        &admin1,
-        &String::from_str(&env, "Test proposal"),
-        &batch,
-    );
+
+    let proposal_id = client.propose(&admin1, &String::from_str(&env, "Test proposal"), &batch);
 
     client.approve(&admin2, &proposal_id);
     client.execute(&admin1, &proposal_id);
@@ -143,7 +135,7 @@ fn test_recovery_flow() {
 
     let admin1 = Address::generate(&env);
     let admins = vec![&env, admin1.clone()];
-    
+
     let contract_id = env.register_contract(None, InstitutionalWallet);
     let client = InstitutionalWalletClient::new(&env, &contract_id);
 
@@ -151,7 +143,7 @@ fn test_recovery_flow() {
 
     let guardian = Address::generate(&env);
     let guardians = vec![&env, guardian.clone()];
-    
+
     // Propose setting guardians
     let tx = Transaction {
         contract: contract_id.clone(),

@@ -15,6 +15,8 @@ stellarlend-lending = { path = "../contracts/lending", features = ["testutils"] 
 stellarlend-amm = { path = "../contracts/amm", features = ["testutils"] }
 bridge = { path = "../contracts/bridge", features = ["testutils"] }
 hello-world = { path = "../contracts/hello-world" }
+stellarlend-pool-factory = { path = "../contracts/pool-factory", features = ["testutils"] }
+stellarlend-reputation = { path = "../contracts/reputation-system", features = ["testutils"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

@@ -1,5 +1,6 @@
 export interface PortfolioPosition {
   assetAddress?: string;
+  assetSymbol?: string;
   collateral: string;
   debt: string;
   borrowInterest: string;
@@ -7,6 +8,8 @@ export interface PortfolioPosition {
   netValue: string;
   collateralRatio: string;
   lastAccrualTime: number;
+  depositApy?: number;
+  borrowApy?: number;
 }
 
 export interface PortfolioValue {
@@ -36,6 +39,43 @@ export interface RiskMetrics {
   /** Estimated maximum drawdown percentage based on leverage. */
   estimatedMaxDrawdownPct: number;
   riskLevel: RiskLevel;
+}
+
+export interface HealthFactorHistoryPoint {
+  timestamp: string;
+  healthFactor: string;
+  riskLevel: RiskLevel;
+}
+
+export interface InterestAccrualProjection {
+  currentDebt: string;
+  currentInterest: string;
+  dailyAccrualRate: number;
+  projectedDebt7d: string;
+  projectedDebt30d: string;
+  projectedDebt90d: string;
+  projectedInterest7d: string;
+  projectedInterest30d: string;
+  projectedInterest90d: string;
+  annualPercentageRate: number;
+}
+
+export interface LiquidationPrice {
+  currentPrice: number;
+  liquidationPrice: number;
+  priceDistancePct: number;
+  estimatedPriceAtCurrentHealth: number;
+  scenarios: Array<{
+    priceDropPct: number;
+    newHealthFactor: string;
+    isLiquidated: boolean;
+  }>;
+}
+
+export interface HealthFactorMonitor {
+  current: RiskMetrics;
+  history: HealthFactorHistoryPoint[];
+  trend: 'improving' | 'stable' | 'deteriorating';
 }
 
 export type SuggestionType =

@@ -113,6 +113,14 @@ pub enum DebtTokenError {
     AlreadyTokenized = 10,
     /// Position does not exist for tokenization
     PositionNotFound = 11,
+    /// Token is not currently listed for sale
+    NotListed = 12,
+    /// Token already has an active listing
+    AlreadyListed = 13,
+    /// Caller is not the seller of the listing
+    NotSeller = 14,
+    /// Listing price must be positive
+    InvalidPrice = 15,
 }
 
 /// Storage keys for debt token data
@@ -133,6 +141,56 @@ pub enum DebtTokenDataKey {
     TotalSupply,
     /// Token URI mapping: TokenUri(token_id) -> String
     TokenUri(u64),
+    /// Active fixed-price listing: Listing(token_id) -> DebtTokenListing
+    Listing(u64),
+}
+
+/// A fixed-price secondary-market listing for a debt token (issue #664).
+///
+/// This is intentionally a minimal, honest slice of the "secondary market with
+/// price discovery" the module's doc comment already aspired to: a simple
+/// fixed-price listing/purchase mechanism, NOT the Dutch-auction / order-book /
+/// atomic-clearing system described in issue #664's full scope. That remains a
+/// separate, much larger deliverable — see the PR description for #664-#667.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DebtTokenListing {
+    pub token_id: u64,
+    pub seller: Address,
+    /// Asking price, denominated in `payment_token`.
+    pub price: i128,
+    /// SEP-41 token contract the buyer pays in.
+    pub payment_token: Address,
+    pub listed_at: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenListedEvent {
+    pub token_id: u64,
+    pub seller: Address,
+    pub price: i128,
+    pub payment_token: Address,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenListingCancelledEvent {
+    pub token_id: u64,
+    pub seller: Address,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenSoldEvent {
+    pub token_id: u64,
+    pub seller: Address,
+    pub buyer: Address,
+    pub price: i128,
+    pub payment_token: Address,
+    pub timestamp: u64,
 }
 
 /// Mint a new debt token for a position
@@ -258,7 +316,23 @@ pub fn transfer_debt_token(
     token_id: u64,
 ) -> Result<(), DebtTokenError> {
     from.require_auth();
+    move_debt_token_ownership(env, from, to, token_id)
+}
 
+/// Core ownership move shared by `transfer_debt_token` (direct, `from`-authorized)
+/// and `buy_listed_debt_token` (marketplace purchase, buyer-authorized).
+///
+/// Deliberately does NOT call `require_auth()` on `from` — a marketplace sale is
+/// authorized by the seller's own earlier `list_debt_token` call (which did
+/// require the seller's auth) plus the buyer's auth on the purchase itself, not
+/// by the seller re-signing at sale time. Callers are responsible for ensuring
+/// whatever authorization model applies to their call site before invoking this.
+fn move_debt_token_ownership(
+    env: &Env,
+    from: Address,
+    to: Address,
+    token_id: u64,
+) -> Result<(), DebtTokenError> {
     // Validate inputs
     if to == Address::zero() {
         return Err(DebtTokenError::ZeroAddress);
@@ -320,6 +394,151 @@ pub fn transfer_debt_token(
     .publish(env);
 
     Ok(())
+}
+
+/// List a debt token for sale at a fixed price (issue #664, minimal slice).
+///
+/// The token remains owned by the seller (no escrow) until `buy_listed_debt_token`
+/// succeeds; a paused/blocked transfer still blocks the eventual sale via the same
+/// checks `transfer_debt_token` already enforces.
+///
+/// # Errors
+/// * `Unauthorized` - Caller does not own the token
+/// * `TokenNotFound` - Token ID does not exist
+/// * `AlreadyListed` - Token already has an active listing
+/// * `InvalidPrice` - Price is not positive
+pub fn list_debt_token(
+    env: &Env,
+    seller: Address,
+    token_id: u64,
+    price: i128,
+    payment_token: Address,
+) -> Result<(), DebtTokenError> {
+    seller.require_auth();
+
+    if price <= 0 {
+        return Err(DebtTokenError::InvalidPrice);
+    }
+    get_debt_position(env, token_id).ok_or(DebtTokenError::TokenNotFound)?;
+    let owner_tokens = get_user_debt_tokens(env, &seller);
+    if !owner_tokens.contains(&token_id) {
+        return Err(DebtTokenError::Unauthorized);
+    }
+    let key = DebtTokenDataKey::Listing(token_id);
+    if env.storage().persistent().has(&key) {
+        return Err(DebtTokenError::AlreadyListed);
+    }
+
+    let listing = DebtTokenListing {
+        token_id,
+        seller: seller.clone(),
+        price,
+        payment_token: payment_token.clone(),
+        listed_at: env.ledger().timestamp(),
+    };
+    env.storage().persistent().set(&key, &listing);
+
+    DebtTokenListedEvent {
+        token_id,
+        seller,
+        price,
+        payment_token,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Cancel an active listing. Only the seller may cancel.
+///
+/// # Errors
+/// * `NotListed` - No active listing for this token
+/// * `NotSeller` - Caller is not the listing's seller
+pub fn cancel_listing(env: &Env, seller: Address, token_id: u64) -> Result<(), DebtTokenError> {
+    seller.require_auth();
+
+    let key = DebtTokenDataKey::Listing(token_id);
+    let listing: DebtTokenListing = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(DebtTokenError::NotListed)?;
+    if listing.seller != seller {
+        return Err(DebtTokenError::NotSeller);
+    }
+    env.storage().persistent().remove(&key);
+
+    DebtTokenListingCancelledEvent {
+        token_id,
+        seller,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Buy a listed debt token at its fixed asking price.
+///
+/// Pulls `price` of `payment_token` from the buyer directly to the seller (no
+/// protocol fee skim — trading-fee distribution is out of scope for this minimal
+/// slice, see the module-level note on `DebtTokenListing`), then moves ownership
+/// via the same `move_debt_token_ownership` core `transfer_debt_token` uses, so
+/// pause/block/liquidation checks apply identically to a marketplace purchase
+/// as to a direct transfer — the only difference is which party's auth gates
+/// the call (buyer here, seller for a direct transfer).
+///
+/// # Errors
+/// * `NotListed` - No active listing for this token
+/// * Any error the shared ownership-move core can return (transfer paused, buyer blocked,
+///   position in liquidation, etc.) — the listing is left intact if the
+///   post-payment transfer fails, since Soroban invocations are atomic and the
+///   whole call reverts together with the payment.
+pub fn buy_listed_debt_token(
+    env: &Env,
+    buyer: Address,
+    token_id: u64,
+) -> Result<(), DebtTokenError> {
+    buyer.require_auth();
+
+    let key = DebtTokenDataKey::Listing(token_id);
+    let listing: DebtTokenListing = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(DebtTokenError::NotListed)?;
+
+    let token_client = soroban_sdk::token::Client::new(env, &listing.payment_token);
+    token_client.transfer(&buyer, &listing.seller, &listing.price);
+
+    // Reuses the exact ownership-move logic (and its pause/block/liquidation
+    // safety checks) that transfer_debt_token runs, but WITHOUT re-requiring the
+    // seller's auth — the seller already authorized this sale by creating the
+    // listing (list_debt_token required their auth); the buyer's own auth on
+    // this call is what authorizes the purchase.
+    move_debt_token_ownership(env, listing.seller.clone(), buyer.clone(), token_id)?;
+
+    env.storage().persistent().remove(&key);
+
+    DebtTokenSoldEvent {
+        token_id,
+        seller: listing.seller,
+        buyer,
+        price: listing.price,
+        payment_token: listing.payment_token,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Read-only: fetch the active listing for a token, if any.
+pub fn get_listing(env: &Env, token_id: u64) -> Option<DebtTokenListing> {
+    env.storage()
+        .persistent()
+        .get(&DebtTokenDataKey::Listing(token_id))
 }
 
 /// Burn a debt token (debt repayment)

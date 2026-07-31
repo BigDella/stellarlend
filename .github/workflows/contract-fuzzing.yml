@@ -1,0 +1,84 @@
+name: Contract Fuzzing
+
+on: workflow_dispatch
+
+concurrency:
+  group: contract-fuzzing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lending-fuzz:
+    name: Lending contract fuzzing
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_TERM_COLOR: always
+      FUZZ_TARGET: lending_actions
+      FUZZ_SECONDS: "1800"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install clang and LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm lcov
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly
+
+      - name: Cache cargo registry and fuzz build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            stellar-lend/target
+            stellar-lend/fuzz/target
+          key: ${{ runner.os }}-cargo-fuzz-long-${{ hashFiles('stellar-lend/Cargo.lock', 'stellar-lend/fuzz/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-long-
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+
+      - name: Validate seed corpus
+        run: bash scripts/fuzz/check_corpus.sh
+
+      - name: Run lending fuzz target for 30 minutes
+        working-directory: stellar-lend
+        run: |
+          cargo +nightly fuzz run "$FUZZ_TARGET" \
+            fuzz/corpus/"$FUZZ_TARGET" \
+            -- \
+            -max_total_time="$FUZZ_SECONDS" \
+            -timeout=10 \
+            -max_len=2048 \
+            -artifact_prefix=fuzz/artifacts/"$FUZZ_TARGET"/ \
+            2>&1 | tee fuzz-"$FUZZ_TARGET".log
+
+      - name: Generate coverage report
+        if: always()
+        working-directory: stellar-lend
+        run: |
+          cargo +nightly fuzz coverage "$FUZZ_TARGET" \
+            fuzz/corpus/"$FUZZ_TARGET" \
+            2>&1 | tee fuzz-coverage-"$FUZZ_TARGET".log || true
+
+      - name: Triage first crash
+        if: failure()
+        run: bash scripts/fuzz/triage_crash.sh "$FUZZ_TARGET"
+
+      - name: Upload fuzz logs and coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-report-${{ github.sha }}
+          path: |
+            stellar-lend/fuzz-*.log
+            stellar-lend/fuzz/coverage/
+            stellar-lend/fuzz/artifacts/
+            stellar-lend/fuzz/regressions/
+          retention-days: 30

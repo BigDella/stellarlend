@@ -1,0 +1,103 @@
+{
+  "network": "local",
+  "update_interval_ms": 5000,
+  "feeds": {
+    "XLM_USD": {
+      "base": "XLM",
+      "quote": "USD",
+      "price": "0.12500000",
+      "decimals": 8,
+      "confidence": "0.00050000",
+      "source": "mock-aggregator",
+      "last_updated": "2025-01-01T00:00:00Z",
+      "volatility_24h": 0.035,
+      "scenarios": {
+        "stable": "0.12500000",
+        "bull": "0.18000000",
+        "bear": "0.08000000",
+        "crash": "0.04000000"
+      }
+    },
+    "BTC_USD": {
+      "base": "BTC",
+      "quote": "USD",
+      "price": "65000.00000000",
+      "decimals": 8,
+      "confidence": "50.00000000",
+      "source": "mock-aggregator",
+      "last_updated": "2025-01-01T00:00:00Z",
+      "volatility_24h": 0.022,
+      "scenarios": {
+        "stable": "65000.00000000",
+        "bull": "85000.00000000",
+        "bear": "42000.00000000",
+        "crash": "25000.00000000"
+      }
+    },
+    "ETH_USD": {
+      "base": "ETH",
+      "quote": "USD",
+      "price": "3500.00000000",
+      "decimals": 8,
+      "confidence": "5.00000000",
+      "source": "mock-aggregator",
+      "last_updated": "2025-01-01T00:00:00Z",
+      "volatility_24h": 0.028,
+      "scenarios": {
+        "stable": "3500.00000000",
+        "bull": "5000.00000000",
+        "bear": "2200.00000000",
+        "crash": "1200.00000000"
+      }
+    },
+    "USDC_USD": {
+      "base": "USDC",
+      "quote": "USD",
+      "price": "1.00000000",
+      "decimals": 8,
+      "confidence": "0.00010000",
+      "source": "mock-aggregator",
+      "last_updated": "2025-01-01T00:00:00Z",
+      "volatility_24h": 0.001,
+      "scenarios": {
+        "stable": "1.00000000",
+        "depeg_minor": "0.99800000",
+        "depeg_major": "0.97000000",
+        "crash": "0.90000000"
+      }
+    },
+    "slUSD_USD": {
+      "base": "slUSD",
+      "quote": "USD",
+      "price": "1.00000000",
+      "decimals": 8,
+      "confidence": "0.00020000",
+      "source": "mock-aggregator",
+      "last_updated": "2025-01-01T00:00:00Z",
+      "volatility_24h": 0.002,
+      "scenarios": {
+        "stable": "1.00000000",
+        "depeg_minor": "0.99700000",
+        "depeg_major": "0.96000000",
+        "crash": "0.88000000"
+      }
+    },
+    "SOL_USD": {
+      "base": "SOL",
+      "quote": "USD",
+      "price": "175.00000000",
+      "decimals": 8,
+      "confidence": "1.00000000",
+      "source": "mock-aggregator",
+      "last_updated": "2025-01-01T00:00:00Z",
+      "volatility_24h": 0.042,
+      "scenarios": {
+        "stable": "175.00000000",
+        "bull": "250.00000000",
+        "bear": "100.00000000",
+        "crash": "50.00000000"
+      }
+    }
+  },
+  "note": "Prices are for local devnet testing only. Use the 'scenarios' object to simulate market conditions by passing ?scenario=crash to the oracle API."
+}

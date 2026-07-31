@@ -1,0 +1,18 @@
+[package]
+name = "stellarlend-safe-math"
+version = "0.1.0"
+edition = "2021"
+description = "Overflow-safe math library with formal verification proofs for StellarLend contracts"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = { version = "1", default-features = false, features = ["alloc"] }
+
+[features]
+testutils = []

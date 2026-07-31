@@ -18,6 +18,9 @@
 //! | `rewards`            | `update_global_index`, `update_user`        |
 //! | `deposit`            | `deposit` — cap / overflow properties       |
 //! | `withdraw`           | `withdraw` — collateral-ratio post-cond     |
+//! | `oracle_spec`        | `get_price` — oracle data consumption paths |
+//! | `cross_contract_spec`| Reentrancy, flash loans, AMM callbacks      |
+//! | `upgrade_spec`       | Upgrade state machine, storage safety       |
 //!
 //! ## How to run
 //!
@@ -57,3 +60,9 @@ pub mod protocol_invariants;
 pub mod rewards;
 #[cfg(any(test, feature = "spec"))]
 pub mod withdraw_spec;
+#[cfg(any(test, feature = "spec"))]
+pub mod oracle_spec;
+#[cfg(any(test, feature = "spec"))]
+pub mod cross_contract_spec;
+#[cfg(any(test, feature = "spec"))]
+pub mod upgrade_spec;
