@@ -22,6 +22,29 @@ router.get('/user/:address/risk-profile', (req, res) => riskController.getUserRi
 
 router.get('/dashboard', (req, res) => riskController.getDashboard(req, res));
 
+// Collateral Ratio Monitoring routes
+router.get('/collateral-ratio/snapshots', (req, res) => riskController.getCollateralRatioSnapshots(req, res));
+
+router.get('/collateral-ratio/snapshots/:asset', (req, res) => riskController.getCollateralRatioSnapshot(req, res));
+
+router.get('/collateral-ratio/positions', (req, res) => riskController.getCollateralRatioPositionRisks(req, res));
+
+router.get('/collateral-ratio/alerts', (req, res) => riskController.getCollateralRatioAlerts(req, res));
+
+router.post('/collateral-ratio/alerts/:alertId/acknowledge', (req, res) => riskController.acknowledgeCollateralRatioAlert(req, res));
+
+router.get('/collateral-ratio/trends/:asset', (req, res) => riskController.getCollateralRatioHistoricalTrends(req, res));
+
+router.get('/collateral-ratio/metrics/:asset', (req, res) => riskController.getCollateralRatioAssetMetrics(req, res));
+
+router.get('/collateral-ratio/metrics', (req, res) => riskController.getAllCollateralRatioAssetMetrics(req, res));
+
+router.put('/collateral-ratio/thresholds', (req, res) => riskController.updateCollateralRatioThresholds(req, res));
+
+router.get('/collateral-ratio/thresholds', (req, res) => riskController.getCollateralRatioThresholds(req, res));
+
+router.get('/collateral-ratio/lending-limits/:asset', (req, res) => riskController.getRiskAdjustedLendingLimit(req, res));
+
 router.post('/stress/run', (req, res) => stressTestController.runStressTest(req, res));
 
 router.post('/stress/run-all', (req, res) => stressTestController.runAllScenarios(req, res));

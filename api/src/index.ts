@@ -4,6 +4,7 @@ import { config } from './config';
 import logger from './utils/logger';
 import { createPriceWebSocket } from './ws/priceWebSocket';
 import { createHealthWebSocket } from './ws/healthWebSocket';
+import { createCollateralRatioWebSocket } from './ws/collateralRatioWebSocket';
 import { SubscriptionService } from './services/subscription.service';
 import { startRiskEngineScheduler } from './services/risk-engine';
 
@@ -11,9 +12,10 @@ const PORT = config.server.port;
 
 const server = createServer(app);
 
-// Attach WebSocket price and health servers to the same HTTP server
+// Attach WebSocket price, health, and collateral ratio servers to the same HTTP server
 createPriceWebSocket(server);
 createHealthWebSocket(server);
+createCollateralRatioWebSocket(server);
 
 // Start subscription keeper for recurring operations
 const subscriptionService = new SubscriptionService();

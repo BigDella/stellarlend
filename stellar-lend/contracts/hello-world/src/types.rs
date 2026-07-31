@@ -213,6 +213,12 @@ pub struct RecoveryRequest {
     pub initiator: Address,
     pub initiated_at: u64,
     pub expires_at: u64,
+    /// #675 — earliest timestamp at which `execute_recovery` may succeed,
+    /// even if the guardian approval threshold was already reached earlier.
+    /// Gives the real account owner (or another guardian) a window to
+    /// notice and call `cancel_recovery` on a fraudulent/mistaken attempt
+    /// before the admin swap becomes irreversible.
+    pub ready_at: u64,
 }
 
 // ========================================================================
@@ -239,6 +245,10 @@ pub const DEFAULT_QUORUM_BPS: u32 = 4_000; // 40% default quorum
 pub const DEFAULT_VOTING_THRESHOLD: i128 = 5_000; // 50% default threshold
 pub const DEFAULT_TIMELOCK_DURATION: u64 = 7 * 24 * 60 * 60; // 7 days
 pub const DEFAULT_RECOVERY_PERIOD: u64 = 3 * 24 * 60 * 60; // 3 days
+/// #675 — minimum delay after the guardian approval threshold is reached
+/// before `execute_recovery` is allowed to succeed, giving the account
+/// owner/guardians a real cancellation window.
+pub const DEFAULT_RECOVERY_DELAY: u64 = 24 * 60 * 60; // 1 day
 pub const MIN_TIMELOCK_DELAY: u64 = 24 * 60 * 60; // 24 hours
 pub const DELEGATION_DEADLINE: u64 = 24 * 60 * 60; // 24 hours
 pub const MAX_DELEGATION_DEPTH: u32 = 3;

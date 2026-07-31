@@ -1215,6 +1215,9 @@ pub fn start_recovery(
         initiator: initiator.clone(),
         initiated_at: now,
         expires_at: now + DEFAULT_RECOVERY_PERIOD,
+        // #675 — see recovery.rs's start_recovery for the rationale; kept
+        // consistent here since both paths construct the same RecoveryRequest.
+        ready_at: now + crate::types::DEFAULT_RECOVERY_DELAY,
     };
 
     env.storage().persistent().set(&recovery_key, &request);
@@ -1888,4 +1891,19 @@ pub fn emit_recovery_executed_event(
         new_admin.clone(),
     );
     env.events().publish(topics, executor.clone());
+}
+
+/// #675
+pub fn emit_recovery_cancelled_event(
+    env: &Env,
+    old_admin: &Address,
+    new_admin: &Address,
+    caller: &Address,
+) {
+    let topics = (
+        Symbol::new(env, "recovery_cancelled"),
+        old_admin.clone(),
+        new_admin.clone(),
+    );
+    env.events().publish(topics, caller.clone());
 }

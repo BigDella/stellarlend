@@ -100,7 +100,9 @@ jobs:
         run: |
           cd stellar-lend
           cargo test --package hello-world --lib tests::differential_test -- --nocapture 2>&1 | tee differential-test-report.txt
+          cargo test --package hello-world --lib tests::hello_world_vs_lending_test -- --nocapture 2>&1 | tee -a differential-test-report.txt
           cargo test --package hello-world --lib tests::migration_verification_test -- --nocapture 2>&1 | tee -a differential-test-report.txt
+          cargo test --package stellarlend-lending --lib migration_verification_test -- --nocapture 2>&1 | tee -a differential-test-report.txt
           grep "test result:" differential-test-report.txt
 
       - name: Upload differential test report

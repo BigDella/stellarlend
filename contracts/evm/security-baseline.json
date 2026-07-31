@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "description": "Historical Slither/Mythril findings accepted by maintainers. Add normalized finding ids only after review.",
+  "findings": []
+}
