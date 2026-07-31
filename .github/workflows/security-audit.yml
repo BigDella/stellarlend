@@ -1,0 +1,80 @@
+name: EVM Security Audit
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/security-audit.yml"
+      - "contracts/evm/**"
+      - "scripts/security/**"
+      - "docs/security-audit.md"
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - ".github/workflows/security-audit.yml"
+      - "contracts/evm/**"
+      - "scripts/security/**"
+      - "docs/security-audit.md"
+  workflow_dispatch:
+    inputs:
+      severity_threshold:
+        description: "Fail on new unsuppressed findings at or above this severity"
+        required: false
+        default: "medium"
+      mythril_timeout:
+        description: "Per-contract Mythril timeout in seconds"
+        required: false
+        default: "900"
+
+permissions:
+  contents: read
+
+jobs:
+  evm-security-audit:
+    name: Slither and Mythril
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install analysis tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install slither-analyzer mythril
+
+      - name: Run Slither and Mythril
+        env:
+          SEVERITY_THRESHOLD: ${{ inputs.severity_threshold || 'medium' }}
+          MYTHRIL_TIMEOUT: ${{ inputs.mythril_timeout || '900' }}
+        run: |
+          python scripts/security/run_evm_audit.py \
+            --contracts-dir contracts/evm \
+            --out-dir security-reports/evm \
+            --baseline contracts/evm/security-baseline.json \
+            --suppressions contracts/evm/security-suppressions.json \
+            --severity-threshold "$SEVERITY_THRESHOLD" \
+            --timeout "$MYTHRIL_TIMEOUT"
+
+      - name: Publish audit summary
+        if: always()
+        run: |
+          if [ -f security-reports/evm/summary.md ]; then
+            cat security-reports/evm/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evm-security-audit
+          path: security-reports/evm
+          if-no-files-found: warn

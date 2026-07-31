@@ -505,7 +505,7 @@ pub fn get_detection_log(env: &Env) -> Vec<SandwichDetection> {
 // ── Premium protection: reverse sandwiched transaction ────────────────────
 
 pub fn calculate_premium_fee(env: &Env, amount: i128) -> i128 {
-    let config = get_config();
+    let config = get_config(env);
     amount
         .saturating_mul(config.premium_fee_bps)
         .saturating_div(10_000)
