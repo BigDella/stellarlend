@@ -1,0 +1,71 @@
+{
+  "name": "StellarLend Devnet",
+  "dockerComposeFile": "../docker/devnet/docker-compose.yml",
+  "service": "api",
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "shutdownAction": "stopCompose",
+
+  "features": {
+    "ghcr.io/devcontainers/features/rust:1": {
+      "version": "latest",
+      "targets": "wasm32-unknown-unknown"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "ms-azuretools.vscode-docker",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss",
+        "ms-vscode.vscode-typescript-next"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "rust-analyzer.cargo.target": "wasm32-unknown-unknown",
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        }
+      }
+    }
+  },
+
+  "forwardPorts": [
+    3000,
+    4000,
+    5432,
+    6379,
+    8000
+  ],
+  "portsAttributes": {
+    "3000": { "label": "API", "onAutoForward": "notify" },
+    "4000": { "label": "Oracle", "onAutoForward": "notify" },
+    "5432": { "label": "PostgreSQL", "onAutoForward": "silent" },
+    "6379": { "label": "Redis", "onAutoForward": "silent" },
+    "8000": { "label": "Soroban RPC / Horizon", "onAutoForward": "notify" }
+  },
+
+  "postCreateCommand": "bash -c 'echo \"StellarLend Devnet ready. Run: cd docker/devnet && ./healthcheck.sh\" && which stellar > /dev/null 2>&1 || (curl -sf https://raw.githubusercontent.com/nicholasgasior/stellar-cli-install/main/install.sh | bash || echo \"Stellar CLI install skipped\")'",
+
+  "remoteUser": "node",
+
+  "remoteEnv": {
+    "STELLAR_NETWORK": "local",
+    "SOROBAN_RPC_URL": "http://soroban-devnet:8000/soroban/rpc",
+    "HORIZON_URL": "http://soroban-devnet:8000",
+    "FRIENDBOT_URL": "http://soroban-devnet:8000/friendbot",
+    "NETWORK_PASSPHRASE": "Standalone Network ; February 2017",
+    "DATABASE_URL": "postgres://stellarlend:stellarlend@postgres:5432/stellarlend",
+    "REDIS_URL": "redis://redis:6379"
+  }
+}

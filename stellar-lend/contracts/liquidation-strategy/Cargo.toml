@@ -1,0 +1,11 @@
+[package]
+name = "liquidation-strategy"
+version = "0.1.0"
+edition = "2021"
+description = "Pluggable liquidation strategy module system with analytics tracking"
+
+[dependencies]
+soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

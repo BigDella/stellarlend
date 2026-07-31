@@ -277,6 +277,15 @@ impl_from_error!(MevProtectionError, {
     MevProtectionError::FeeCapExceeded => LendingError::FeeCapExceeded,
     MevProtectionError::InvalidAmount => LendingError::InvalidAmount,
     MevProtectionError::InvalidOperation => LendingError::InvalidState,
+    MevProtectionError::SlippageExpired => LendingError::CommitExpired,
+    MevProtectionError::SlippageExceeded => LendingError::LimitExceeded,
+    MevProtectionError::AuctionNotFound => LendingError::NotFound,
+    MevProtectionError::AuctionNotOpen => LendingError::InvalidState,
+    MevProtectionError::AuctionNotReady => LendingError::CommitNotReady,
+    MevProtectionError::BidNotFound => LendingError::NotFound,
+    MevProtectionError::BidTooLow => LendingError::LimitExceeded,
+    MevProtectionError::PrivateRouteRequired => LendingError::CommitRequired,
+    MevProtectionError::PrivateRouteNotFound => LendingError::NotFound,
 });
 
 impl_from_error!(RepayError, {

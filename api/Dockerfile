@@ -1,23 +1,42 @@
-# Stage 1: Build environment
-FROM node:20-alpine AS builder
+# ─────────────────────────────────────────────────────────────────────────────
+# StellarLend API – Multi-stage Dockerfile
+#
+# Stages:
+#   base        – shared Node.js base (deps only)
+#   development – hot-reload via ts-node-dev (used by docker compose)
+#   builder     – compiles TypeScript to JS
+#   production  – minimal runtime image
+#
+# ARM / M1 compatible: node:20-alpine ships linux/amd64 + linux/arm64 manifests
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Base ──────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS base
 WORKDIR /app
-# Copy package files and install all dependencies (including devDependencies for building)
+# Install wget for healthcheck
+RUN apk add --no-cache wget
 COPY package*.json ./
+
+# ── Development (hot-reload) ──────────────────────────────────────────────────
+FROM base AS development
+# Install ALL deps (including devDependencies for ts-node-dev)
 RUN npm ci
-# Copy the rest of the source code and build
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
+
+# ── Builder ───────────────────────────────────────────────────────────────────
+FROM base AS builder
+RUN npm ci
 COPY . .
 RUN npm run build
 
-# Stage 2: Production environment
-FROM node:20-alpine AS runner
+# ── Production ────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS production
 WORKDIR /app
-# Copy package files and install ONLY production dependencies
+RUN apk add --no-cache wget
 COPY package*.json ./
 RUN npm ci --omit=dev
-# Copy the compiled output from the builder stage
 COPY --from=builder /app/dist ./dist
-
 EXPOSE 3000
-
-# Start the application
 CMD ["node", "dist/index.js"]

@@ -1,0 +1,16 @@
+[package]
+name = "stellarlend-migration-tests"
+version = "0.1.0"
+edition = "2021"
+description = "Automated migration testing framework with rollback validation for StellarLend"
+
+[[bin]]
+name = "migration-test-runner"
+path = "src/main.rs"
+
+[dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+rand = "0.8"

@@ -1,0 +1,16 @@
+{
+  "name": "raw_events",
+  "version": "1.0.0",
+  "description": "Decoded protocol events landing in the data lake",
+  "type": "struct",
+  "fields": [
+    { "name": "event_type", "type": "string", "required": true },
+    { "name": "ledger", "type": "int64", "required": true },
+    { "name": "tx_hash", "type": "string", "required": true },
+    { "name": "block_timestamp", "type": "timestamp-millis", "required": true },
+    { "name": "topics_json", "type": "string", "required": true },
+    { "name": "value_json", "type": "string", "required": true },
+    { "name": "schema_version", "type": "int32", "required": true }
+  ],
+  "partitions": ["date", "event_type"]
+}

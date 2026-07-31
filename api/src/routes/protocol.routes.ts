@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import * as lendingController from '../controllers/lending.controller';
+import { protocolHealthController } from '../controllers/protocolHealth.controller';
 import { requireRole } from '../middleware/rbac';
 
 const router: Router = Router();
@@ -82,6 +83,67 @@ router.get(
   '/audit-logs/verify',
   requireRole('operator'),
   lendingController.verifyAuditLogIntegrity
+);
+
+/**
+ * @openapi
+ * /protocol/health-score:
+ *   get:
+ *     summary: Composite protocol health score (0-100)
+ *     description: >
+ *       Weighted composite of capital efficiency, liquidity, bad debt,
+ *       concentration (HHI-based), oracle health, and governance health.
+ *     tags:
+ *       - Protocol
+ */
+router.get('/health-score', (req, res) => protocolHealthController.getHealthScore(req, res));
+
+/**
+ * @openapi
+ * /protocol/health-score/history:
+ *   get:
+ *     summary: Health score history with per-component breakdown
+ *     tags:
+ *       - Protocol
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ */
+router.get('/health-score/history', (req, res) => protocolHealthController.getHistory(req, res));
+
+/**
+ * @openapi
+ * /protocol/health-score/weights:
+ *   get:
+ *     summary: Current health score component weights
+ *     tags:
+ *       - Protocol
+ *   put:
+ *     summary: Update health score component weights (governance-controlled)
+ *     tags:
+ *       - Protocol
+ */
+router.get('/health-score/weights', (req, res) => protocolHealthController.getWeights(req, res));
+router.put(
+  '/health-score/weights',
+  requireRole('admin'),
+  (req, res) => protocolHealthController.updateWeights(req, res)
+);
+
+/**
+ * @openapi
+ * /protocol/health-score/alerts:
+ *   get:
+ *     summary: Active health score alerts (score below configured threshold)
+ *     tags:
+ *       - Protocol
+ */
+router.get('/health-score/alerts', (req, res) => protocolHealthController.getAlerts(req, res));
+router.put(
+  '/health-score/alert-threshold',
+  requireRole('admin'),
+  (req, res) => protocolHealthController.updateAlertThreshold(req, res)
 );
 
 export default router;

@@ -1,0 +1,19 @@
+[package]
+name = "stellarlend-dutch-auction"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "stellarlend_dutch_auction"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+soroban-sdk = { workspace = true }
+soroban-token-sdk = { workspace = true }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

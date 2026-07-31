@@ -1,0 +1,27 @@
+{
+  "id": "scenario_001",
+  "name": "Deposit, Borrow, Liquidate, Repay",
+  "description": "Full user journey covering collateral deposit, borrowing, liquidation, and repayment.",
+  "steps": [
+    {
+      "action": "deposit",
+      "params": { "user": "supplier", "asset": "USDC", "amount": "1000000" },
+      "expected_result": "success"
+    },
+    {
+      "action": "borrow",
+      "params": { "user": "borrower", "asset": "USDC", "amount": "500000" },
+      "expected_result": "success"
+    },
+    {
+      "action": "liquidate",
+      "params": { "liquidator": "keeper", "borrower": "borrower", "repay_amount": "250000" },
+      "expected_result": "success"
+    },
+    {
+      "action": "repay",
+      "params": { "user": "borrower", "asset": "USDC", "amount": "250000" },
+      "expected_result": "success"
+    }
+  ]
+}

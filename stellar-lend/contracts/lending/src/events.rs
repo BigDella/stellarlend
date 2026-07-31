@@ -1,3 +1,4 @@
+pub use shared_events::*;
 //! Contract events for the lending workspace (`LendingContract`, `DataStore`, `UpgradeManager`).
 //!
 //! # Indexer / off-chain consumers
@@ -28,257 +29,70 @@ use crate::interest_rate::InterestRateConfig;
 
 // ─── Lending (LendingContract) ─────────────────────────────────────────────
 
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct BorrowEvent {
-    pub user: Address,
-    pub asset: Address,
-    pub amount: i128,
-    pub collateral: i128,
-    pub timestamp: u64,
-}
+
 
 /// Collateral added to a borrow position (same static topic as vault deposits; distinguish by payload).
-#[contractevent(topics = ["deposit_event"])]
-#[derive(Clone, Debug)]
-pub struct BorrowCollateralDepositEvent {
-    pub user: Address,
-    pub asset: Address,
-    pub amount: i128,
-    pub timestamp: u64,
-}
 
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct RepayEvent {
-    pub user: Address,
-    pub asset: Address,
-    pub amount: i128,
-    pub timestamp: u64,
-}
+
+
 
 /// Vault / pool deposit (same static topic as [`BorrowCollateralDepositEvent`]; includes `new_balance`).
-#[contractevent(topics = ["deposit_event"])]
-#[derive(Clone, Debug)]
-pub struct VaultDepositEvent {
-    pub user: Address,
-    pub asset: Address,
-    pub amount: i128,
-    pub new_balance: i128,
-    pub timestamp: u64,
-}
 
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct WithdrawEvent {
-    pub user: Address,
-    pub asset: Address,
-    pub amount: i128,
-    pub remaining_balance: i128,
-    pub timestamp: u64,
-}
 
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct FlashLoanEvent {
-    pub receiver: Address,
-    pub asset: Address,
-    pub amount: i128,
-    pub fee: i128,
-    pub timestamp: u64,
-}
 
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct PegDeviationEvent {
-    pub asset: Address,
-    pub price: i128,
-    pub target_price: i128,
-    pub deviation_bps: i128,
-    pub timestamp: u64,
-}
 
-#[contractevent]
-#[derive(Clone, Debug)]
-pub struct StabilityFeeAppliedEvent {
-    pub asset: Address,
-    pub fee_bps: i128,
-    pub timestamp: u64,
-}
 
-#[contractevent(topics = ["interest_rate_model_updated"])]
-#[derive(Clone, Debug)]
-pub struct InterestRateModelUpdatedEvent {
-    pub caller: Address,
-    pub previous: InterestRateConfig,
-    pub updated: InterestRateConfig,
-    pub timestamp: u64,
-}
+
+
+
+
+
+
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
-pub enum RiskAlertSeverity {
-    Warning = 1,
-    Critical = 2,
-    Emergency = 3,
-}
 
-#[contractevent(topics = ["risk_util_alert"])]
-#[derive(Clone, Debug)]
-pub struct RiskUtilizationAlertEvent {
-    pub severity: u32,
-    pub utilization_bps: u32,
-    pub total_debt: i128,
-    pub debt_ceiling: i128,
-    pub timestamp: u64,
-}
 
-#[contractevent(topics = ["borrow_commit_create"])]
-#[derive(Clone, Debug)]
-pub struct BorrowCommitmentCreatedEvent {
-    #[topic]
-    pub commitment_id: u64,
-    pub owner: Address,
-    pub borrow_asset: Address,
-    pub borrow_amount: i128,
-    pub expiry: u64,
-}
 
-#[contractevent(topics = ["borrow_commit_cancel"])]
-#[derive(Clone, Debug)]
-pub struct BorrowCommitmentCancelledEvent {
-    #[topic]
-    pub commitment_id: u64,
-    pub owner: Address,
-}
 
-#[contractevent(topics = ["borrow_commit_exec"])]
-#[derive(Clone, Debug)]
-pub struct BorrowCommitmentExecutedEvent {
-    #[topic]
-    pub commitment_id: u64,
-    pub owner: Address,
-    pub borrowed_amount: i128,
-    pub collateral_amount: i128,
-}
+
+
+
+
+
 
 // ─── Data store contract ────────────────────────────────────────────────────
 
-#[contractevent(topics = ["ds_init"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct DataStoreInitEvent {
-    #[topic]
-    pub admin: Address,
-}
 
-#[contractevent(topics = ["writer"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct DataStoreWriterChangeEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub writer: Address,
-}
 
-#[contractevent(topics = ["ds_save"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct DataStoreSaveEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub key: String,
-    pub value_len: u32,
-}
 
-#[contractevent(topics = ["ds_bkup"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct DataStoreBackupEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub backup_name: String,
-    pub key_count: u32,
-}
 
-#[contractevent(topics = ["ds_rest"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct DataStoreRestoreEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub backup_name: String,
-    pub entry_count: u32,
-}
 
-#[contractevent(topics = ["ds_migr"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct DataStoreMigrateEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub new_version: u32,
-    pub memo: Option<String>,
-}
+
+
+
+
+
+
 
 // ─── Upgrade manager contract ──────────────────────────────────────────────
 
-#[contractevent(topics = ["up_init"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct UpgradeInitEvent {
-    #[topic]
-    pub admin: Address,
-    pub required_approvals: u32,
-}
 
-#[contractevent(topics = ["up_apadd"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct UpgradeApproverAddedEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub approver: Address,
-}
 
-#[contractevent(topics = ["up_prop"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct UpgradeProposedEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub id: u64,
-    pub new_version: u32,
-}
 
-#[contractevent(topics = ["up_appr"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct UpgradeApprovalRecordedEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub proposal_id: u64,
-    pub approval_count: u32,
-}
 
-#[contractevent(topics = ["up_exec"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct UpgradeExecutedEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub proposal_id: u64,
-    pub new_version: u32,
-}
 
-#[contractevent(topics = ["up_roll"], data_format = "single-value")]
-#[derive(Clone, Debug)]
-pub struct UpgradeRollbackEvent {
-    #[topic]
-    pub caller: Address,
-    #[topic]
-    pub proposal_id: u64,
-    pub prev_version: u32,
-}
+
+
+
+
+
+
+
+
+
+
 
 #[allow(deprecated)]
 pub fn emit_bad_debt(env: &Env, user: &Address, amount: i128) {

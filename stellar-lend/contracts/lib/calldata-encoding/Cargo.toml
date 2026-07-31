@@ -1,0 +1,15 @@
+[package]
+name = "calldata-encoding"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+
+[dependencies]
+soroban-sdk = { version = "20.5.0", features = ["contracttype"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1

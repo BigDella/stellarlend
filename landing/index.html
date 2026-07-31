@@ -103,6 +103,57 @@
     </div>
   </section>
 
+  <section id="privacy" style="max-width:800px;margin:4rem auto;padding:2rem;">
+    <h2 style="text-align:center;margin-bottom:2rem;">Privacy Mode</h2>
+    <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:2rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem;">
+        <div>
+          <h3 style="margin-bottom:0.5rem;">Shielded Transactions</h3>
+          <p style="color:var(--text-muted);font-size:0.9rem;">
+            Enable privacy for deposits and withdrawals using stealth addresses
+            and zero-knowledge proofs.
+          </p>
+        </div>
+        <label style="position:relative;display:inline-block;width:60px;height:34px;flex-shrink:0;margin-left:2rem;">
+          <input type="checkbox" id="privacy-toggle" style="opacity:0;width:0;height:0;">
+          <span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:var(--border);border-radius:34px;transition:0.3s;"></span>
+          <span id="privacy-slider" style="position:absolute;content:'';height:26px;width:26px;left:4px;bottom:4px;background-color:var(--text);border-radius:50%;transition:0.3s;"></span>
+        </label>
+      </div>
+      <div id="privacy-features" style="display:none;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1.5rem;">
+          <div style="background:var(--bg);padding:1rem;border-radius:8px;border:1px solid var(--border);">
+            <strong>Stealth Address</strong>
+            <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem;">
+              One-time deposit addresses generated per transaction using ECDH.
+            </p>
+          </div>
+          <div style="background:var(--bg);padding:1rem;border-radius:8px;border:1px solid var(--border);">
+            <strong>Anonymity Set</strong>
+            <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem;">
+              Minimum 10 participants per privacy pool. No linkability.
+            </p>
+          </div>
+          <div style="background:var(--bg);padding:1rem;border-radius:8px;border:1px solid var(--border);">
+            <strong>Compliance Option</strong>
+            <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem;">
+              Optional disclosure for regulated participants.
+            </p>
+          </div>
+          <div style="background:var(--bg);padding:1rem;border-radius:8px;border:1px solid var(--border);">
+            <strong>Gas Optimized</strong>
+            <p style="color:var(--text-muted);font-size:0.85rem;margin-top:0.5rem;">
+              Less than 2x standard transaction gas cost.
+            </p>
+          </div>
+        </div>
+        <p style="color:var(--accent);font-size:0.85rem;margin-top:1rem;text-align:center;">
+          Uses ERC-5564 (stealth addresses) and ERC-6538 (stealth meta-address) standards.
+        </p>
+      </div>
+    </div>
+  </section>
+
   <footer style="text-align:center; padding:2rem;">
     <a id="footer-github" target="_blank">GitHub</a> |
     <a id="footer-docs" target="_blank">Docs</a>
@@ -123,6 +174,24 @@
       document.getElementById("footer-github").href = CONFIG.GITHUB;
       document.getElementById("footer-docs").href = CONFIG.GITHUB + "/tree/main/docs";
 
+      // privacy mode toggle
+      const toggle = document.getElementById("privacy-toggle");
+      const features = document.getElementById("privacy-features");
+      const slider = document.getElementById("privacy-slider");
+
+      toggle.addEventListener("change", () => {
+        if (toggle.checked) {
+          features.style.display = "block";
+          slider.style.background = "var(--accent)";
+          slider.style.transform = "translateX(26px)";
+          toggle.parentElement.querySelector("span:first-of-type").style.background = "var(--primary)";
+        } else {
+          features.style.display = "none";
+          slider.style.background = "var(--text)";
+          slider.style.transform = "translateX(0)";
+          toggle.parentElement.querySelector("span:first-of-type").style.background = "var(--border)";
+        }
+      });
     });
   </script>
 

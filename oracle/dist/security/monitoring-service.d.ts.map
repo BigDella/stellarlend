@@ -1,0 +1,1 @@
+{"version":3,"file":"monitoring-service.d.ts","sourceRoot":"","sources":["../../src/security/monitoring-service.ts"],"names":[],"mappings":"AACA,OAAO,EAAa,aAAa,EAAE,MAAM,SAAS,CAAC;AAEnD,qBAAa,iBAAiB;IAC5B,OAAO,CAAC,MAAM,CAAiB;;IAMzB,OAAO,CAAC,aAAa,EAAE,GAAG,GAAG,OAAO,CAAC,aAAa,EAAE,CAAC;CAgB5D"}

@@ -1,0 +1,24 @@
+{
+  "id": "2020-covid-crash",
+  "name": "2020 COVID-19 Market Crash",
+  "description": "Global pandemic triggers circuit breakers across all markets. Sharp 35-40% drawdown in days, followed by aggressive monetary response.",
+  "category": "historical",
+  "version": "1.0.0",
+  "created": "2024-01-01T00:00:00Z",
+  "priceChanges": [
+    { "asset": "XLM", "changePercent": -40 },
+    { "asset": "BTC", "changePercent": -50 },
+    { "asset": "ETH", "changePercent": -55 },
+    { "asset": "USDC", "changePercent": -8 }
+  ],
+  "correlationShifts": [
+    { "asset1": "XLM", "asset2": "BTC", "newCorrelation": 0.85 }
+  ],
+  "volatilityMultipliers": [
+    { "asset": "XLM", "multiplier": 3.5 },
+    { "asset": "BTC", "multiplier": 4.0 },
+    { "asset": "ETH", "multiplier": 4.5 }
+  ],
+  "cascadingLiquidation": true,
+  "tags": ["black-swan", "pandemic", "liquidity-crisis"]
+}

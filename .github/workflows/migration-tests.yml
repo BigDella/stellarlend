@@ -1,0 +1,90 @@
+name: Migration Tests
+
+on: workflow_dispatch
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration-tests:
+    name: Migration — Scenario + Fuzz Tests
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - name: Configure sccache
+        run: |
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "SCCACHE_GHA_ENABLED=true" >> $GITHUB_ENV
+
+      - name: Cache cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            stellar-lend/target
+          key: ${{ runner.os }}-cargo-migration-${{ hashFiles('stellar-lend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-migration-
+
+      - name: Build migration test runner
+        run: |
+          cd stellar-lend
+          cargo build --package stellarlend-migration-tests --verbose
+
+      - name: Run scenario tests
+        run: |
+          cd stellar-lend
+          cargo run --package stellarlend-migration-tests -- --no-fuzz 2>&1 | tee migration-scenario-report.txt
+
+      - name: Run fuzz tests (quick)
+        run: |
+          cd stellar-lend
+          cargo run --package stellarlend-migration-tests -- --fuzz 50 --json 2>&1 | tee migration-fuzz-report.json
+
+      - name: Run full fuzz tests (nightly)
+        if: github.event_name == 'schedule'
+        run: |
+          cd stellar-lend
+          cargo run --package stellarlend-migration-tests -- --fuzz 500 --json 2>&1 | tee migration-fuzz-full-report.json
+
+      - name: Upload scenario report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-scenario-report
+          path: stellar-lend/migration-scenario-report.txt
+
+      - name: Upload fuzz report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-fuzz-report
+          path: stellar-lend/migration-fuzz-report.json
+
+      - name: Upload full fuzz report
+        if: always() && github.event_name == 'schedule'
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-fuzz-full-report
+          path: stellar-lend/migration-fuzz-full-report.json
+
+      - name: Fail on test failure
+        if: failure()
+        run: |
+          echo "::error::Migration tests failed — see uploaded reports for details"
+          exit 1
