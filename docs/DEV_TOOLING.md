@@ -118,12 +118,26 @@ The verifier checks:
 - local artifact hash against the deployment manifest
 - AMM settings readability when an AMM deployment is present
 
-Rollback planning is derived from the previous manifest snapshot:
+## Contract Source Code Verification
+
+To verify that deployed contracts match their source code:
 
 ```bash
-npm run deploy:rollback -- --network testnet
-npm run deploy:rollback -- --network testnet --execute
+# Verify a specific contract
+npm run verify:contract -- --contract-id <contract_id> --source <source_path> --network testnet
+
+# Verify during deployment
+npm run deploy -- --network testnet --build --verify
 ```
+
+The verification rebuilds the contract from source and compares the bytecode with the deployed contract. This ensures:
+
+- Automated compilation verification
+- Metadata matching
+- Multi-file verification support
+- Proxy pattern verification (for upgradeable contracts)
+
+Verification results are stored in the deployment manifest with a `verification_status` field.
 
 ## Mutation Testing
 

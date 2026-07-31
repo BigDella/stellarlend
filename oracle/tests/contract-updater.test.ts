@@ -259,6 +259,62 @@ describe('ContractUpdater', () => {
       expect(results[1].asset).toBe('BTC');
     });
 
+    describe('retry backoff delay verification', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('should apply exponential backoff delays between retries via updatePrice', async () => {
+    const { SorobanRpc } = await import('@stellar/stellar-sdk');
+    const mockServer = new SorobanRpc.Server('mock');
+
+    let attemptCount = 0;
+    vi.spyOn(mockServer, 'simulateTransaction').mockImplementation(async () => {
+      attemptCount++;
+      if (attemptCount < 3) throw new Error('Temporary failure');
+      return { results: [{ xdr: 'mock-xdr' }] };
+    });
+
+    const resultPromise = updater.updatePrice('XLM', 150000n, Date.now());
+    await vi.advanceTimersByTimeAsync(1000); // retry 1 delay
+    await vi.advanceTimersByTimeAsync(2000); // retry 2 delay
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(attemptCount).toBe(3);
+  });
+
+  it('should apply 4s delay on third retry', async () => {
+    const { SorobanRpc } = await import('@stellar/stellar-sdk');
+    const mockServer = new SorobanRpc.Server('mock');
+
+    const retryUpdater = createContractUpdater({
+      ...mockConfig,
+      maxRetries: 4,
+    });
+
+    let attemptCount = 0;
+    vi.spyOn(mockServer, 'simulateTransaction').mockImplementation(async () => {
+      attemptCount++;
+      if (attemptCount < 4) throw new Error('Temporary failure');
+      return { results: [{ xdr: 'mock-xdr' }] };
+    });
+
+    const resultPromise = retryUpdater.updatePrice('XLM', 150000n, Date.now());
+    await vi.advanceTimersByTimeAsync(1000); // retry 1
+    await vi.advanceTimersByTimeAsync(2000); // retry 2
+    await vi.advanceTimersByTimeAsync(4000); // retry 3
+    const result = await resultPromise;
+
+    expect(result.success).toBe(true);
+    expect(attemptCount).toBe(4);
+  });
+});
+
     it('should handle empty price array', async () => {
       const results = await updater.updatePrices([]);
 

@@ -91,20 +91,46 @@ fn calculate_accrued_interest(
 ///
 /// # Returns
 /// * `Result<(), RepayError>` - Success or an error
-fn accrue_interest(env: &Env, position: &mut Position) -> Result<(), RepayError> {
+fn accrue_interest(env: &Env, user: &Address, position: &mut Position) -> Result<(), RepayError> {
     let current_time = env.ledger().timestamp();
     if position.debt == 0 {
         position.borrow_interest = 0;
         position.last_accrual_time = current_time;
+        let current_index = crate::interest_rate::update_lending_index(env)
+            .map_err(|_| RepayError::Overflow)?
+            .borrow_index;
+        env.storage().persistent().set(
+            &DepositDataKey::UserBorrowIndex(user.clone()),
+            &current_index,
+        );
         return Ok(());
     }
+
+    let current_index = crate::interest_rate::update_lending_index(env)
+        .map_err(|_| RepayError::Overflow)?
+        .borrow_index;
+
+    let user_index = env
+        .storage()
+        .persistent()
+        .get::<DepositDataKey, i128>(&DepositDataKey::UserBorrowIndex(user.clone()))
+        .unwrap_or(current_index);
+
     let new_interest =
-        calculate_accrued_interest(env, position.debt, position.last_accrual_time, current_time)?;
+        crate::interest_rate::compute_index_interest(position.debt, user_index, current_index)
+            .map_err(|_| RepayError::Overflow)?;
+
     position.borrow_interest = position
         .borrow_interest
         .checked_add(new_interest)
         .ok_or(RepayError::Overflow)?;
     position.last_accrual_time = current_time;
+
+    env.storage().persistent().set(
+        &DepositDataKey::UserBorrowIndex(user.clone()),
+        &current_index,
+    );
+
     Ok(())
 }
 
@@ -213,7 +239,7 @@ pub fn repay_debt(
         return Err(RepayError::NoDebt);
     }
 
-    accrue_interest(env, &mut position)?;
+    accrue_interest(env, &user, &mut position)?;
 
     let total_debt = position
         .debt
@@ -368,6 +394,12 @@ pub fn repay_debt(
             timestamp,
         },
     );
+
+    // Update credit score - check if repayment is on time
+    // Consider on-time if debt is being reduced (not just interest)
+    let is_on_time = principal_paid > 0 || repay_amount == total_debt;
+    let _ = crate::credit_score::update_score_on_repayment(env, &user, repay_amount, is_on_time);
+    let _ = crate::credit_score::record_borrow(env, &user, 0); // Update tracking
 
     // Emit position updated event
     emit_position_updated_event(env, &user, &position);

@@ -1,33 +1,48 @@
 {
   "name": "stellarlend",
   "version": "1.0.0",
+  "description": "StellarLend monorepo – pre-commit tooling and workspace scripts",
   "private": true,
   "workspaces": [
     "api",
-    "oracle"
+    "oracle",
+    "packages/sdk",
+    "packages/ui-lending"
   ],
   "scripts": {
-    "install:all": "npm install",
-    "test:all": "npm run test --workspaces --if-present",
-    "lint:all": "npm run lint --workspaces --if-present",
-    "build:all": "npm run build --workspaces --if-present",
-    "format:all": "npm run format --workspaces --if-present",
-    "typecheck:all": "npm run typecheck --workspaces --if-present",
-    "dev:fork": "bash scripts/dev/start-fork-env.sh",
-    "dev:watch:contracts": "bash scripts/dev/watch-contracts.sh",
-    "dev:seed": "bash scripts/dev/apply-seed-state.sh",
-    "trace:contract": "npm --workspace oracle run trace:analyze --",
-    "deploy:verify": "bash scripts/verify-deployment.sh",
-    "deploy:rollback": "bash scripts/rollback.sh",
-    "mutation:api": "npm --workspace api run mutation:test",
-    "mutation:api:check": "npm --workspace api run mutation:check"
-  },
-  "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=8.0.0"
+    "prepare": "husky || true",
+    "lint:api": "npm run lint --workspace=api",
+    "format:api": "npm run format --workspace=api",
+    "typecheck:api": "npm run typecheck --workspace=api",
+    "lint:oracle": "npm run lint --workspace=oracle",
+    "format:oracle": "npm run format --workspace=oracle",
+    "typecheck:oracle": "npm run typecheck --workspace=oracle",
+    "lint:all": "npm run lint:api && npm run lint:oracle",
+    "format:all": "npm run format:api && npm run format:oracle",
+    "typecheck:all": "npm run typecheck:api && npm run typecheck:oracle",
+    "test:all": "npm run test --workspace=api && npm run test --workspace=oracle",
+    "build:all": "npm run build --workspace=api && npm run build --workspace=oracle",
+    "install:all": "npm install --workspaces"
   },
   "devDependencies": {
-    "@types/node": "^20.10.5",
-    "typescript": "^5.3.3"
+    "@commitlint/cli": "^19.3.0",
+    "@commitlint/config-conventional": "^19.2.2",
+    "husky": "^9.1.4",
+    "lint-staged": "^15.2.7"
+  },
+  "lint-staged": {
+    "api/src/**/*.ts": [
+      "npm run lint --workspace=api --",
+      "npm run format:check --workspace=api --",
+      "npm run typecheck --workspace=api"
+    ],
+    "oracle/src/**/*.ts": [
+      "npm run lint --workspace=oracle --",
+      "npm run format:check --workspace=oracle --",
+      "npm run typecheck --workspace=oracle"
+    ],
+    "contract/**/*.rs": [
+      "cargo check --manifest-path contract/Cargo.toml"
+    ]
   }
 }

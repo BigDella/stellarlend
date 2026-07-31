@@ -93,29 +93,56 @@ fn calculate_accrued_interest(
     .map_err(|_| BorrowError::Overflow)
 }
 
-/// Accrue interest on a position
-/// Updates the position's borrow_interest and last_accrual_time
-fn accrue_interest(env: &Env, position: &mut Position) -> Result<(), BorrowError> {
+/// Accrue compound interest on a position using the global borrow index.
+///
+/// The index model ensures all users (active and passive) see fair interest
+/// distribution without timestamp-manipulation risk.
+fn accrue_interest(env: &Env, user: &Address, position: &mut Position) -> Result<(), BorrowError> {
     let current_time = env.ledger().timestamp();
 
     if position.debt == 0 {
         position.borrow_interest = 0;
         position.last_accrual_time = current_time;
+        // Sync user's index even with no debt so subsequent borrows start fresh.
+        let current_index = crate::interest_rate::update_lending_index(env)
+            .map_err(|_| BorrowError::Overflow)?
+            .borrow_index;
+        env.storage().persistent().set(
+            &DepositDataKey::UserBorrowIndex(user.clone()),
+            &current_index,
+        );
         return Ok(());
     }
 
-    // Calculate new interest accrued using dynamic rate
-    let new_interest =
-        calculate_accrued_interest(env, position.debt, position.last_accrual_time, current_time)?;
+    // Update the global index to the current ledger time (atomic with this tx).
+    let current_index = crate::interest_rate::update_lending_index(env)
+        .map_err(|_| BorrowError::Overflow)?
+        .borrow_index;
 
-    // Add to existing interest
+    // Retrieve the user's recorded index from their last interaction.
+    let user_index = env
+        .storage()
+        .persistent()
+        .get::<DepositDataKey, i128>(&DepositDataKey::UserBorrowIndex(user.clone()))
+        .unwrap_or(current_index); // Default: user borrowed at current index (no prior debt).
+
+    // Compound interest = principal * (current_index - user_index) / user_index
+    let new_interest =
+        crate::interest_rate::compute_index_interest(position.debt, user_index, current_index)
+            .map_err(|_| BorrowError::Overflow)?;
+
     position.borrow_interest = position
         .borrow_interest
         .checked_add(new_interest)
         .ok_or(BorrowError::Overflow)?;
 
-    // Update last accrual time
     position.last_accrual_time = current_time;
+
+    // Store the updated index so the next accrual starts from here.
+    env.storage().persistent().set(
+        &DepositDataKey::UserBorrowIndex(user.clone()),
+        &current_index,
+    );
 
     Ok(())
 }
@@ -330,8 +357,8 @@ pub fn borrow_asset(
             last_accrual_time: timestamp,
         });
 
-    // Accrue interest on existing debt before borrowing
-    accrue_interest(env, &mut position)?;
+    // Accrue compound interest on existing debt before borrowing
+    accrue_interest(env, &user, &mut position)?;
 
     // Get effective collateral for borrowing capacity:
     // Multi-asset users: oracle-priced aggregate (collateral factors already applied)

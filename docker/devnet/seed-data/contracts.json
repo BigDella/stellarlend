@@ -1,0 +1,201 @@
+{
+  "network": "local",
+  "network_passphrase": "Standalone Network ; February 2017",
+  "deploy_order": [
+    "common",
+    "lending-types",
+    "lending-interest",
+    "lending-risk",
+    "lending-core",
+    "lending",
+    "stablecoin",
+    "amm",
+    "bridge",
+    "delegation-registry",
+    "institutional-wallet",
+    "migration-hub",
+    "stealth-address",
+    "privacy-pool",
+    "test-utils",
+    "hello-world"
+  ],
+  "contracts": {
+    "common": {
+      "name": "common",
+      "wasm_path": "target/wasm32-unknown-unknown/release/common.wasm",
+      "init_fn": null,
+      "init_args": {},
+      "dependencies": [],
+      "description": "Shared types and utilities used across all contracts"
+    },
+    "lending-types": {
+      "name": "lending_types",
+      "wasm_path": "target/wasm32-unknown-unknown/release/lending_types.wasm",
+      "init_fn": null,
+      "init_args": {},
+      "dependencies": ["common"],
+      "description": "Type definitions for the lending protocol"
+    },
+    "lending-interest": {
+      "name": "lending_interest",
+      "wasm_path": "target/wasm32-unknown-unknown/release/lending_interest.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "base_rate": 200,
+        "multiplier": 500,
+        "jump_multiplier": 2000,
+        "optimal_utilization": 8000
+      },
+      "dependencies": ["common", "lending-types"],
+      "description": "Interest rate calculation module"
+    },
+    "lending-risk": {
+      "name": "lending_risk",
+      "wasm_path": "target/wasm32-unknown-unknown/release/lending_risk.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "min_collateral_ratio": 15000,
+        "liquidation_threshold": 12500,
+        "liquidation_penalty": 500
+      },
+      "dependencies": ["common", "lending-types"],
+      "description": "Risk assessment and monitoring module"
+    },
+    "lending-core": {
+      "name": "lending_core",
+      "wasm_path": "target/wasm32-unknown-unknown/release/lending_core.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "interest_module": "$LENDING_INTEREST_ID",
+        "risk_module": "$LENDING_RISK_ID"
+      },
+      "dependencies": ["common", "lending-types", "lending-interest", "lending-risk"],
+      "description": "Core lending protocol logic"
+    },
+    "lending": {
+      "name": "lending",
+      "wasm_path": "target/wasm32-unknown-unknown/release/lending.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "core_module": "$LENDING_CORE_ID",
+        "oracle": "$ORACLE_CONTRACT_ID",
+        "flash_loan_fee": 9,
+        "protocol_fee": 100
+      },
+      "dependencies": ["common", "lending-types", "lending-core"],
+      "description": "Main lending protocol facade contract"
+    },
+    "stablecoin": {
+      "name": "stablecoin",
+      "wasm_path": "target/wasm32-unknown-unknown/release/stablecoin.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "name": "StellarLend USD",
+        "symbol": "slUSD",
+        "decimals": 7
+      },
+      "dependencies": ["common"],
+      "description": "Protocol stablecoin (slUSD)"
+    },
+    "amm": {
+      "name": "amm",
+      "wasm_path": "target/wasm32-unknown-unknown/release/amm.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "swap_fee": 30,
+        "protocol_fee_share": 1667
+      },
+      "dependencies": ["common"],
+      "description": "Automated Market Maker for token swaps"
+    },
+    "bridge": {
+      "name": "bridge",
+      "wasm_path": "target/wasm32-unknown-unknown/release/bridge.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "min_confirmations": 1,
+        "bridge_fee": 50
+      },
+      "dependencies": ["common"],
+      "description": "Cross-chain bridge contract"
+    },
+    "delegation-registry": {
+      "name": "delegation_registry",
+      "wasm_path": "target/wasm32-unknown-unknown/release/delegation_registry.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS"
+      },
+      "dependencies": ["common"],
+      "description": "Permission delegation registry"
+    },
+    "institutional-wallet": {
+      "name": "institutional_wallet",
+      "wasm_path": "target/wasm32-unknown-unknown/release/institutional_wallet.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "required_approvals": 2,
+        "max_daily_withdrawal": "1000000000000"
+      },
+      "dependencies": ["common", "delegation-registry"],
+      "description": "Multi-sig institutional custody wallet"
+    },
+    "migration-hub": {
+      "name": "migration_hub",
+      "wasm_path": "target/wasm32-unknown-unknown/release/migration_hub.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS"
+      },
+      "dependencies": ["common"],
+      "description": "Contract upgrade and migration coordinator"
+    },
+    "stealth-address": {
+      "name": "stealth_address",
+      "wasm_path": "target/wasm32-unknown-unknown/release/stealth_address.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS"
+      },
+      "dependencies": ["common"],
+      "description": "Privacy-preserving stealth address generator"
+    },
+    "privacy-pool": {
+      "name": "privacy_pool",
+      "wasm_path": "target/wasm32-unknown-unknown/release/privacy_pool.wasm",
+      "init_fn": "initialize",
+      "init_args": {
+        "admin": "$ADMIN_ADDRESS",
+        "pool_size": 10
+      },
+      "dependencies": ["common", "stealth-address"],
+      "description": "Privacy pool for shielded transactions"
+    },
+    "test-utils": {
+      "name": "test_utils",
+      "wasm_path": "target/wasm32-unknown-unknown/release/test_utils.wasm",
+      "init_fn": null,
+      "init_args": {},
+      "dependencies": ["common"],
+      "description": "Testing utilities (devnet only)"
+    },
+    "hello-world": {
+      "name": "hello_world",
+      "wasm_path": "target/wasm32-unknown-unknown/release/hello_world.wasm",
+      "init_fn": "hello",
+      "init_args": {
+        "to": "StellarLend"
+      },
+      "dependencies": [],
+      "description": "Smoke-test contract"
+    }
+  }
+}

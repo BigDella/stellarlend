@@ -25,6 +25,7 @@
 #![cfg(test)]
 
 use crate::oracle::{OracleConfig, OracleDataKey, PriceFeed};
+use crate::deposit::{DepositDataKey, Position, ProtocolAnalytics};
 use crate::{HelloContract, HelloContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -398,6 +399,53 @@ fn test_borrow_succeeds_with_fresh_price() {
 
     let report = client.get_user_report(&user);
     assert_eq!(report.position.debt, 1_000);
+}
+
+#[test]
+#[should_panic(expected = "Liquidation error")]
+fn test_liquidation_blocked_on_stale_price() {
+    let env = create_env();
+    let (contract_id, admin, client) = setup(&env);
+    let asset = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let borrower = Address::generate(&env);
+    let liquidator = Address::generate(&env);
+
+    env.ledger().with_mut(|li| li.timestamp = 0);
+    client.update_price_feed(&admin, &asset, &100_000_000, &8, &oracle);
+
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(
+            &DepositDataKey::Position(borrower.clone()),
+            &Position {
+                collateral: 700,
+                debt: 1_000,
+                borrow_interest: 0,
+                last_accrual_time: env.ledger().timestamp(),
+            },
+        );
+        env.storage().persistent().set(
+            &DepositDataKey::CollateralBalance(borrower.clone()),
+            &700,
+        );
+        env.storage().persistent().set(
+            &DepositDataKey::ProtocolAnalytics,
+            &ProtocolAnalytics {
+                total_deposits: 700,
+                total_borrows: 1_000,
+                total_value_locked: 700,
+            },
+        );
+    });
+
+    env.ledger().with_mut(|li| li.timestamp = 5_000);
+    client.liquidate(
+        &liquidator,
+        &borrower,
+        &Some(asset.clone()),
+        &Some(asset.clone()),
+        &500,
+    );
 }
 
 // =============================================================================

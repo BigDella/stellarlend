@@ -108,9 +108,9 @@ describe('OracleService Lifecycle Integration Tests', () => {
     };
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (service) {
-      service.stop();
+      await service.stop();
     }
     vi.clearAllTimers();
   });

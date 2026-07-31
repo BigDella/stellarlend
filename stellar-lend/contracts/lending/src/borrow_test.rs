@@ -1,5 +1,5 @@
 use super::*;
-use crate::borrow::calculate_interest;
+use crate::borrow::{calculate_interest, RateType};
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     Address, Env,
@@ -24,6 +24,102 @@ fn setup_test(
 
     client.initialize(&admin, &1_000_000_000, &1000);
     (client, admin, user, asset, collateral_asset)
+}
+
+#[test]
+fn test_borrow_stable_rate_choice_and_accounting() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, user, asset, collateral_asset) = setup_test(&env);
+
+    client.borrow_with_rate(
+        &user,
+        &asset,
+        &10_000,
+        &collateral_asset,
+        &20_000,
+        &RateType::Stable,
+    );
+
+    let stable = client.get_user_debt_with_rate(&user, &RateType::Stable);
+    assert_eq!(stable.borrowed_amount, 10_000);
+    assert_eq!(stable.rate_type, RateType::Stable);
+    assert!(stable.stable_rate_bps > 0);
+
+    let variable = client.get_user_debt_with_rate(&user, &RateType::Variable);
+    assert_eq!(variable.borrowed_amount, 0);
+    assert_eq!(variable.interest_accrued, 0);
+}
+
+#[test]
+fn test_stable_rate_recalculates_periodically_and_includes_premium() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    let (client, admin, user, asset, collateral_asset) = setup_test(&env);
+
+    // Set initial variable rate to 5%.
+    client.set_variable_borrow_rate_bps(&admin, &500);
+
+    client.borrow_with_rate(
+        &user,
+        &asset,
+        &10_000,
+        &collateral_asset,
+        &20_000,
+        &RateType::Stable,
+    );
+
+    let p1 = client.get_user_debt_with_rate(&user, &RateType::Stable);
+    assert_eq!(p1.stable_rate_bps, 600); // 500 avg + 100 premium
+
+    // Advance time past default 6h recalc window, then increase variable rate.
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000 + 6 * 3600 + 1;
+    });
+    client.set_variable_borrow_rate_bps(&admin, &1000);
+
+    // Trigger stable state update by borrowing stable with a new user.
+    let user2 = Address::generate(&env);
+    client.borrow_with_rate(
+        &user2,
+        &asset,
+        &10_000,
+        &collateral_asset,
+        &20_000,
+        &RateType::Stable,
+    );
+
+    let p2 = client.get_user_debt_with_rate(&user2, &RateType::Stable);
+    // EMA: (500*9 + 1000)/10 = 550; + premium 100 = 650
+    assert_eq!(p2.stable_rate_bps, 650);
+}
+
+#[test]
+fn test_switch_rate_type_moves_accounting_and_charges_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, _admin, user, asset, collateral_asset) = setup_test(&env);
+
+    client.borrow(&user, &asset, &10_000, &collateral_asset, &20_000);
+
+    // Switch to stable
+    client.switch_rate_type(&user, &asset, &RateType::Stable);
+
+    let variable = client.get_user_debt_with_rate(&user, &RateType::Variable);
+    assert_eq!(variable.borrowed_amount, 0);
+    assert_eq!(variable.interest_accrued, 0);
+
+    let stable = client.get_user_debt_with_rate(&user, &RateType::Stable);
+    assert_eq!(stable.borrowed_amount, 10_000);
+    // Switch fee is 10 bps of principal = 10
+    assert!(stable.interest_accrued >= 10);
 }
 
 #[test]
@@ -162,6 +258,8 @@ fn test_interest_overflow_returns_error() {
         interest_accrued: 0,
         last_update: 0,
         asset: Address::generate(&env),
+        rate_type: RateType::Variable,
+        stable_rate_bps: 0,
     };
 
     // Advance time by 100 years to amplify interest (roughly borrowed * 5x at 5% APY)

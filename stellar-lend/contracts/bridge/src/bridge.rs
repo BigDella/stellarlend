@@ -44,60 +44,72 @@ pub enum ContractError {
     InvalidMessageOrdering = 33,
 }
 
-#[contractevent]
+// ─── Standardized bridge events ──────────────────────────────────────────────
+// All events carry: relevant identifiers, state fields, and a `timestamp` field
+// (ledger timestamp in seconds). Topic prefixes follow the StellarLend
+// short snake_case convention used by indexers.
+
+#[contractevent(topics = ["br_reg"])]
 #[derive(Clone, Debug)]
 pub struct BridgeRegisteredEvent {
     pub bridge_id: String,
     pub fee_bps: u64,
     pub min_amount: i128,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_fee"])]
 #[derive(Clone, Debug)]
 pub struct BridgeFeeUpdatedEvent {
     pub bridge_id: String,
     pub fee_bps: u64,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_active"])]
 #[derive(Clone, Debug)]
 pub struct BridgeActiveUpdatedEvent {
     pub bridge_id: String,
     pub active: bool,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_dep"])]
 #[derive(Clone, Debug)]
 pub struct BridgeDepositEvent {
     pub bridge_id: String,
     pub amount: i128,
     pub fee: i128,
     pub net: i128,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_wdraw"])]
 #[derive(Clone, Debug)]
 pub struct BridgeWithdrawalEvent {
     pub bridge_id: String,
     pub amount: i128,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_pause"])]
 #[derive(Clone, Debug)]
 pub struct BridgeAcceptancePauseEvent {
     pub paused: bool,
     pub admin: Address,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_val_upd"])]
 #[derive(Clone, Debug)]
 pub struct ValidatorUpdatedEvent {
     pub validator: Address,
     pub stake: i128,
     pub active: bool,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_sec_cfg"])]
 #[derive(Clone, Debug)]
 pub struct SecurityConfigUpdatedEvent {
     pub min_validator_signatures: u32,
@@ -105,30 +117,34 @@ pub struct SecurityConfigUpdatedEvent {
     pub optimistic_delay_ledgers: u32,
     pub slash_bps: u64,
     pub supported_message_version: u32,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_slash"])]
 #[derive(Clone, Debug)]
 pub struct ValidatorSlashedEvent {
     pub validator: Address,
     pub amount: i128,
     pub remaining_stake: i128,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_ch_emrg"])]
 #[derive(Clone, Debug)]
 pub struct ChannelEmergencyCloseEvent {
     pub channel_id: String,
     pub closed: bool,
     pub reason: String,
+    pub timestamp: u64,
 }
 
-#[contractevent]
+#[contractevent(topics = ["br_anomaly"])]
 #[derive(Clone, Debug)]
 pub struct BridgeAnomalyEvent {
     pub channel_id: String,
     pub anomaly_count: u32,
     pub reason: String,
+    pub timestamp: u64,
 }
 
 const MAX_FEE_BPS: u64 = 1_000;
@@ -194,6 +210,20 @@ pub struct BridgeSecurityStats {
     pub anomaly_events: u64,
     pub slashes: u64,
     pub emergency_closures: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BridgeAnalytics {
+    pub bridge_id: String,
+    pub total_volume_deposited: i128,
+    pub total_volume_withdrawn: i128,
+    pub net_volume: i128,
+    pub fee_bps: u64,
+    pub total_fees_collected: i128,
+    pub active_validators: u32,
+    pub total_validators: u32,
+    pub is_active: bool,
 }
 
 #[contracttype]
@@ -448,6 +478,7 @@ impl BridgeContract {
                 channel_id: channel_id.clone(),
                 closed: true,
                 reason: reason.clone(),
+                timestamp: env.ledger().timestamp(),
             }
             .publish(env);
         }
@@ -460,6 +491,7 @@ impl BridgeContract {
             channel_id: channel_id.clone(),
             anomaly_count: channel.anomaly_count,
             reason,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(env);
     }
@@ -551,6 +583,7 @@ impl BridgeContract {
             bridge_id: bridge_id.clone(),
             fee_bps,
             min_amount,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         log!(&env, "register_bridge {}", bridge_id);
@@ -572,7 +605,12 @@ impl BridgeContract {
         cfg.fee_bps = fee_bps;
         Self::save_bridge(&env, &bridge_id, &cfg);
 
-        BridgeFeeUpdatedEvent { bridge_id, fee_bps }.publish(&env);
+        BridgeFeeUpdatedEvent {
+            bridge_id,
+            fee_bps,
+            timestamp: env.ledger().timestamp(),
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -587,7 +625,12 @@ impl BridgeContract {
         cfg.active = active;
         Self::save_bridge(&env, &bridge_id, &cfg);
 
-        BridgeActiveUpdatedEvent { bridge_id, active }.publish(&env);
+        BridgeActiveUpdatedEvent {
+            bridge_id,
+            active,
+            timestamp: env.ledger().timestamp(),
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -633,6 +676,7 @@ impl BridgeContract {
             amount,
             fee,
             net,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         log!(
@@ -674,6 +718,7 @@ impl BridgeContract {
         BridgeWithdrawalEvent {
             bridge_id: bridge_id.clone(),
             amount,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         log!(
@@ -699,6 +744,7 @@ impl BridgeContract {
         BridgeAcceptancePauseEvent {
             paused,
             admin: caller,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         Ok(())
@@ -726,6 +772,7 @@ impl BridgeContract {
             optimistic_delay_ledgers: cfg.optimistic_delay_ledgers,
             slash_bps: cfg.slash_bps,
             supported_message_version: cfg.supported_message_version,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         Ok(())
@@ -767,6 +814,7 @@ impl BridgeContract {
             validator,
             stake,
             active: true,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         Ok(())
@@ -788,6 +836,7 @@ impl BridgeContract {
             validator,
             stake,
             active,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         Ok(())
@@ -1017,6 +1066,7 @@ impl BridgeContract {
         BridgeWithdrawalEvent {
             bridge_id: message.bridge_id.clone(),
             amount: message.amount,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         log!(
@@ -1084,6 +1134,7 @@ impl BridgeContract {
                     validator: validator.clone(),
                     amount: slash_amount,
                     remaining_stake: record.stake,
+                    timestamp: env.ledger().timestamp(),
                 }
                 .publish(&env);
                 slashed.push_back(validator);
@@ -1125,6 +1176,7 @@ impl BridgeContract {
             channel_id,
             closed: true,
             reason,
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         Ok(())
@@ -1145,6 +1197,7 @@ impl BridgeContract {
             channel_id,
             closed: false,
             reason: Self::empty_string(&env),
+            timestamp: env.ledger().timestamp(),
         }
         .publish(&env);
         Ok(())
@@ -1209,6 +1262,50 @@ impl BridgeContract {
 
     pub fn get_bridge_security_stats(env: Env) -> BridgeSecurityStats {
         Self::load_stats(&env)
+    }
+
+    pub fn get_bridge_analytics(
+        env: Env,
+        bridge_id: String,
+    ) -> Result<BridgeAnalytics, ContractError> {
+        let bridge = Self::load_bridge(&env, &bridge_id)?;
+        let validators = Self::validator_list(&env);
+        let active_validators = validators
+            .iter()
+            .filter_map(|v| Self::load_validator(&env, &v).ok())
+            .filter(|r| r.active)
+            .count() as u32;
+
+        Ok(BridgeAnalytics {
+            bridge_id: bridge_id.clone(),
+            total_volume_deposited: bridge.total_deposited,
+            total_volume_withdrawn: bridge.total_withdrawn,
+            net_volume: bridge
+                .total_deposited
+                .saturating_sub(bridge.total_withdrawn),
+            fee_bps: bridge.fee_bps,
+            total_fees_collected: Self::compute_fee(
+                env.clone(),
+                bridge.total_deposited,
+                bridge.fee_bps,
+            ),
+            active_validators,
+            total_validators: validators.len() as u32,
+            is_active: bridge.active,
+        })
+    }
+
+    pub fn get_all_bridge_analytics(env: Env) -> Vec<BridgeAnalytics> {
+        let bridges = Self::bridge_list(&env);
+        let mut analytics = Vec::new(&env);
+
+        for bridge_id in bridges.iter() {
+            if let Ok(stats) = Self::get_bridge_analytics(env.clone(), bridge_id.clone()) {
+                analytics.push_back(stats);
+            }
+        }
+
+        analytics
     }
 
     pub fn upgrade_init(

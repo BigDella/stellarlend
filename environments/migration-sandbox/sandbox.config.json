@@ -1,0 +1,29 @@
+{
+  "name": "migration-sandbox",
+  "description": "Isolated Soroban devnet for migration dry-run simulation",
+  "network": "local",
+  "sourceNetwork": "pubnet",
+  "rpcUrl": "http://localhost:8000/soroban/rpc",
+  "horizonUrl": "http://localhost:8000",
+  "networkPassphrase": "Standalone Network ; February 2017",
+  "snapshotDir": ".migration-sandbox/snapshots",
+  "reportsDir": ".migration-sandbox/reports",
+  "approvalsDir": ".migration-sandbox/approvals",
+  "quickstartImage": "stellar/quickstart:latest",
+  "quickstartLimits": "testnet",
+  "contracts": {
+    "lendingContractEnvVar": "LENDING_CONTRACT_ID",
+    "migrationHubEnvVar": "MIGRATION_HUB_CONTRACT_ID"
+  },
+  "invariants": {
+    "totalCollateralNonNegative": true,
+    "totalDebtNonNegative": true,
+    "reserveFactorBounds": [0, 100],
+    "minCollateralRatioMin": 100
+  },
+  "gasEstimation": {
+    "networkThroughputTxPerLedger": 100,
+    "ledgerCloseTimeSec": 5,
+    "cpuInsnsPerXlm": 25000000
+  }
+}

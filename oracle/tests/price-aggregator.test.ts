@@ -188,3 +188,147 @@ describe('PriceAggregator', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Priority-based failover tests
+// ---------------------------------------------------------------------------
+
+describe('PriceAggregator – priority-based failover', () => {
+  let high: MockProvider; // priority 1 (highest)
+  let mid: MockProvider;  // priority 2
+  let low: MockProvider;  // priority 3 (lowest)
+
+  function makeFailoverAggregator(failureThreshold = 1) {
+    const validator = createValidator({ maxDeviationPercent: 50, maxStalenessSeconds: 300 });
+    const cache = createPriceCache(30);
+    return createAggregator([high, mid, low], validator, cache, {
+      minSources: 1,
+      failoverMode: true,
+      circuitBreaker: { failureThreshold, backoffMs: 60_000 },
+    });
+  }
+
+  beforeEach(() => {
+    high = new MockProvider('high', 1, 0.5, { XLM: 0.15 });
+    mid  = new MockProvider('mid',  2, 0.3, { XLM: 0.152 });
+    low  = new MockProvider('low',  3, 0.2, { XLM: 0.148 });
+  });
+
+  it('uses highest-priority provider when healthy', async () => {
+    const agg = makeFailoverAggregator();
+    const result = await agg.getPrice('XLM');
+
+    expect(result).not.toBeNull();
+    expect(result!.sources).toHaveLength(1);
+    expect(result!.sources[0].source).toBe('high');
+  });
+
+  it('does NOT query lower-priority providers when primary succeeds', async () => {
+    const midSpy = vi.spyOn(mid, 'fetchPrice');
+    const lowSpy = vi.spyOn(low, 'fetchPrice');
+
+    const agg = makeFailoverAggregator();
+    await agg.getPrice('XLM');
+
+    expect(midSpy).not.toHaveBeenCalled();
+    expect(lowSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails over to mid-priority provider when high-priority fails', async () => {
+    high.setFail(true);
+    const agg = makeFailoverAggregator();
+    const result = await agg.getPrice('XLM');
+
+    expect(result).not.toBeNull();
+    expect(result!.sources[0].source).toBe('mid');
+  });
+
+  it('fails over to lowest-priority provider when high and mid both fail', async () => {
+    high.setFail(true);
+    mid.setFail(true);
+    const agg = makeFailoverAggregator();
+    const result = await agg.getPrice('XLM');
+
+    expect(result).not.toBeNull();
+    expect(result!.sources[0].source).toBe('low');
+  });
+
+  it('returns null when all providers fail', async () => {
+    high.setFail(true);
+    mid.setFail(true);
+    low.setFail(true);
+    const agg = makeFailoverAggregator();
+    const result = await agg.getPrice('XLM');
+
+    expect(result).toBeNull();
+  });
+
+  it('skips provider with open circuit breaker and uses next in priority order', async () => {
+    // failureThreshold=1 → one failure opens the circuit
+    const agg = makeFailoverAggregator(1);
+
+    // Open high's circuit breaker
+    high.setFail(true);
+    await agg.getPrice('XLM'); // mid serves; high's CB opens
+
+    // Verify high's circuit breaker is now OPEN
+    const metrics = agg.getCircuitBreakerMetrics();
+    const highMetrics = metrics.find((m) => m.providerName === 'high');
+    expect(highMetrics?.state).toBe('OPEN');
+  });
+
+  it('recovers to higher-priority provider after circuit breaker closes', async () => {
+    const validator = createValidator({ maxDeviationPercent: 50, maxStalenessSeconds: 300 });
+
+    // backoffMs=0 → circuit moves to HALF_OPEN immediately after failure
+    const cache = createPriceCache(30);
+    const agg = createAggregator([high, mid, low], validator, cache, {
+      minSources: 1,
+      failoverMode: true,
+      circuitBreaker: { failureThreshold: 1, backoffMs: 0 },
+    });
+
+    // 1. High fails → circuit opens → mid serves
+    high.setFail(true);
+    const r1 = await agg.getPrice('XLM');
+    expect(r1!.sources[0]!.source).toBe('mid');
+
+    // 2. High recovers; backoffMs=0 → HALF_OPEN probe allowed immediately
+    high.setFail(false);
+
+    // Open circuit for high in agg
+    high.setFail(true);
+    await agg.getPrice('XLM'); // opens circuit, result cached
+    high.setFail(false);
+
+    // Clear cache so the next getPrice() triggers a real fetch
+    await cache.clear();
+
+    // Next request: backoffMs=0 → HALF_OPEN probe → high succeeds → CLOSED → high serves
+    const r2 = await agg.getPrice('XLM');
+    expect(r2!.sources[0]!.source).toBe('high');
+  });
+
+  it('isFailoverMode() returns true when failoverMode is enabled', () => {
+    const agg = makeFailoverAggregator();
+    expect(agg.isFailoverMode()).toBe(true);
+  });
+
+  it('isFailoverMode() returns false by default', () => {
+    const validator = createValidator({ maxDeviationPercent: 50, maxStalenessSeconds: 300 });
+    const cache = createPriceCache(30);
+    const agg = createAggregator([high, mid, low], validator, cache, { minSources: 1 });
+    expect(agg.isFailoverMode()).toBe(false);
+  });
+
+  it('getStats() includes failoverMode flag', () => {
+    const agg = makeFailoverAggregator();
+    expect(agg.getStats().failoverMode).toBe(true);
+  });
+
+  it('providers are ordered by priority (ascending)', () => {
+    const agg = makeFailoverAggregator();
+    const names = agg.getProviders();
+    expect(names).toEqual(['high', 'mid', 'low']);
+  });
+});

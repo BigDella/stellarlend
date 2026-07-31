@@ -819,75 +819,223 @@ impl HelloContract {
         flash_loan::set_flash_loan_config(&env, caller, config).map_err(Into::into)
     }
 
-    // -------------------------------------------------------------------------
-    // Rate limiting configuration & monitoring
-    // -------------------------------------------------------------------------
-
-    /// Admin-only: configure default rate limits for an operation.
-    pub fn configure_rate_limit_operation(
+    /// Set the native asset address used when `asset = None` (admin-only).
+    pub fn set_native_asset_address(
         env: Env,
         caller: Address,
-        operation: soroban_sdk::Symbol,
-        cfg: rate_limiter::RateLimitConfig,
+        native_asset: Address,
     ) -> Result<(), LendingError> {
-        rate_limiter::configure_operation_limit(&env, caller, operation, cfg).map_err(|e| match e {
-            rate_limiter::RateLimitError::Unauthorized => LendingError::Unauthorized,
-            rate_limiter::RateLimitError::InvalidConfig => LendingError::InvalidParameter,
-            _ => LendingError::InvalidParameter,
-        })
+        deposit::set_native_asset_address(&env, caller, native_asset).map_err(Into::into)
     }
 
-    /// Admin-only: configure global-per-pool rate limits for an operation.
-    pub fn configure_rate_limit_pool(
+    // -------------------------------------------------------------------------
+    // Interest Rate Views (Issue #180)
+    // -------------------------------------------------------------------------
+
+    /// Current borrow APY in basis points (e.g., 500 = 5%).
+    pub fn get_borrow_rate(env: Env) -> i128 {
+        interest_rate::get_current_borrow_rate(&env).unwrap_or(0)
+    }
+
+    /// Current supply APY in basis points.
+    pub fn get_supply_rate(env: Env) -> i128 {
+        interest_rate::get_current_supply_rate(&env).unwrap_or(0)
+    }
+
+    /// Current protocol utilization in basis points (0-10000).
+    pub fn get_utilization_rate(env: Env) -> i128 {
+        interest_rate::get_current_utilization(&env).unwrap_or(0)
+    }
+
+    /// Admin-only: update interest rate model parameters.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_interest_rate_config(
         env: Env,
         caller: Address,
-        operation: soroban_sdk::Symbol,
-        pool: Address,
-        cfg: rate_limiter::RateLimitConfig,
+        base_rate_bps: Option<i128>,
+        kink_utilization_bps: Option<i128>,
+        multiplier_bps: Option<i128>,
+        jump_multiplier_bps: Option<i128>,
+        rate_floor_bps: Option<i128>,
+        rate_ceiling_bps: Option<i128>,
+        spread_bps: Option<i128>,
     ) -> Result<(), LendingError> {
-        rate_limiter::configure_pool_limit(&env, caller, operation, pool, cfg).map_err(
-            |e| match e {
-                rate_limiter::RateLimitError::Unauthorized => LendingError::Unauthorized,
-                rate_limiter::RateLimitError::InvalidConfig => LendingError::InvalidParameter,
-                _ => LendingError::InvalidParameter,
-            },
+        interest_rate::update_interest_rate_config(
+            &env,
+            caller,
+            base_rate_bps,
+            kink_utilization_bps,
+            multiplier_bps,
+            jump_multiplier_bps,
+            rate_floor_bps,
+            rate_ceiling_bps,
+            spread_bps,
         )
+        .map_err(Into::into)
     }
 
-    /// Admin-only: grant/revoke extra burst capacity for a (user, operation) pair.
-    pub fn set_user_rate_limit_grace(
+    /// Current global borrow index (scaled by 1e12; starts at 1e12 = "1.0").
+    pub fn get_borrow_index(env: Env) -> i128 {
+        interest_rate::get_borrow_index(&env)
+    }
+
+    /// Current global supply index (scaled by 1e12).
+    pub fn get_supply_index(env: Env) -> i128 {
+        interest_rate::get_supply_index(&env)
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-Asset Lending Module (Issues #177, #178, #179)
+    // -------------------------------------------------------------------------
+
+    /// Initialize the cross-asset lending module (admin-only, once).
+    pub fn initialize_ca(env: Env, admin: Address) -> Result<(), LendingError> {
+        cross_asset::initialize(&env, admin).map_err(Into::into)
+    }
+
+    /// Register a new asset with per-asset parameters (admin-only).
+    pub fn initialize_asset(
+        env: Env,
+        asset: Option<Address>,
+        config: cross_asset::AssetConfig,
+    ) -> Result<(), LendingError> {
+        cross_asset::initialize_asset(&env, asset, config).map_err(Into::into)
+    }
+
+    /// Update an existing asset's configuration (admin-only).
+    /// Emits SupplyCapChangedEvent / BorrowCapChangedEvent when caps change.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_ca_config(
+        env: Env,
+        asset: Option<Address>,
+        collateral_factor: Option<i128>,
+        liquidation_threshold: Option<i128>,
+        max_supply: Option<i128>,
+        max_borrow: Option<i128>,
+        can_collateralize: Option<bool>,
+        can_borrow: Option<bool>,
+    ) -> Result<(), LendingError> {
+        cross_asset::update_asset_config(
+            &env,
+            asset,
+            collateral_factor,
+            liquidation_threshold,
+            max_supply,
+            max_borrow,
+            can_collateralize,
+            can_borrow,
+        )
+        .map_err(Into::into)
+    }
+
+    /// Update oracle price for an asset (admin-only).
+    pub fn update_asset_price(
+        env: Env,
+        asset: Option<Address>,
+        price: i128,
+    ) -> Result<(), LendingError> {
+        cross_asset::update_asset_price(&env, asset, price).map_err(Into::into)
+    }
+
+    /// Deposit collateral into a specific asset pool.
+    pub fn cross_asset_deposit(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> Result<cross_asset::AssetPosition, LendingError> {
+        cross_asset::cross_asset_deposit(&env, user, asset, amount).map_err(Into::into)
+    }
+
+    /// Withdraw collateral from a specific asset pool.
+    pub fn cross_asset_withdraw(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> Result<cross_asset::AssetPosition, LendingError> {
+        cross_asset::cross_asset_withdraw(&env, user, asset, amount).map_err(Into::into)
+    }
+
+    /// Borrow from a specific asset pool against cross-pool (or isolated) collateral.
+    pub fn cross_asset_borrow(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> Result<cross_asset::AssetPosition, LendingError> {
+        cross_asset::cross_asset_borrow(&env, user, asset, amount).map_err(Into::into)
+    }
+
+    /// Repay debt in a specific asset pool.
+    pub fn ca_repay_debt(
+        env: Env,
+        user: Address,
+        asset: Option<Address>,
+        amount: i128,
+    ) -> Result<cross_asset::AssetPosition, LendingError> {
+        cross_asset::cross_asset_repay(&env, user, asset, amount).map_err(Into::into)
+    }
+
+    /// Get a user's cross-asset position summary (health factor, capacity, etc.).
+    pub fn get_ca_position(
+        env: Env,
+        user: Address,
+    ) -> Result<cross_asset::UserPositionSummary, LendingError> {
+        cross_asset::get_user_position_summary(&env, &user).map_err(Into::into)
+    }
+
+    /// Read-only: look up asset configuration.
+    pub fn get_ca_asset_config(
+        env: Env,
+        asset: Option<Address>,
+    ) -> Result<cross_asset::AssetConfig, LendingError> {
+        cross_asset::get_asset_config_by_address(&env, asset).map_err(Into::into)
+    }
+
+    /// Read-only: return the list of registered asset keys.
+    pub fn get_ca_asset_list(env: Env) -> Vec<cross_asset::AssetKey> {
+        cross_asset::get_asset_list(&env)
+    }
+
+    /// Supply headroom analytics: (available, cap, current_supply).
+    /// Returns (i128::MAX, 0, current_supply) when cap is unlimited.
+    pub fn get_supply_headroom(
+        env: Env,
+        asset: Option<Address>,
+    ) -> Result<(i128, i128, i128), LendingError> {
+        cross_asset::get_supply_headroom(&env, asset).map_err(Into::into)
+    }
+
+    /// Borrow utilization analytics: (current_borrows, cap).
+    /// Returns (borrows, 0) when cap is unlimited.
+    pub fn get_borrow_utilization(
+        env: Env,
+        asset: Option<Address>,
+    ) -> Result<(i128, i128), LendingError> {
+        cross_asset::get_borrow_utilization(&env, asset).map_err(Into::into)
+    }
+
+    /// Emergency freeze or unfreeze a pool (admin-only).
+    pub fn freeze_pool(
         env: Env,
         caller: Address,
-        user: Address,
-        operation: soroban_sdk::Symbol,
-        enabled: bool,
+        asset: Option<Address>,
+        freeze: bool,
     ) -> Result<(), LendingError> {
-        rate_limiter::set_user_grace(&env, caller, user, operation, enabled).map_err(|e| match e {
-            rate_limiter::RateLimitError::Unauthorized => LendingError::Unauthorized,
-            _ => LendingError::InvalidParameter,
-        })
-    }
-
-    /// Read-only: returns per-user bucket status.
-    pub fn get_user_rate_limit_status(
-        env: Env,
-        user: Address,
-        operation: soroban_sdk::Symbol,
-        pool: Address,
-    ) -> rate_limiter::RateLimitStatus {
-        rate_limiter::get_user_status(&env, user, operation, pool)
-    }
-
-    /// Read-only: returns global-per-pool bucket status.
-    pub fn get_global_rate_limit_status(
-        env: Env,
-        operation: soroban_sdk::Symbol,
-        pool: Address,
-    ) -> rate_limiter::RateLimitStatus {
-        rate_limiter::get_global_status(&env, operation, pool)
+        cross_asset::freeze_pool(&env, caller, asset, freeze).map_err(Into::into)
     }
 }
 
+#[cfg(test)]
+#[path = "tests/borrow_cap_test.rs"]
+mod borrow_cap_test;
+#[cfg(test)]
+#[path = "tests/supply_cap_test.rs"]
+mod supply_cap_test;
+#[cfg(test)]
+#[path = "tests/isolated_pool_test.rs"]
+mod isolated_pool_test;
 #[cfg(test)]
 #[path = "tests/cross_contract_test.rs"]
 mod cross_contract_test;
@@ -907,9 +1055,12 @@ mod test_reentrancy;
 mod test_zero_amount;
 #[cfg(test)]
 mod treasury_test;
-// Temporarily disabled due to pre-existing issues
-// #[cfg(test)]
-// #[path = "tests/timelock_test.rs"]
-// mod timelock_test;
-// Disabled until the full governance attack-prevention surface is implemented.
-// mod governance_attack_prevention_test;
+#[cfg(test)]
+#[path = "tests/diff_harness.rs"]
+mod diff_harness;
+#[cfg(test)]
+#[path = "tests/differential_test.rs"]
+mod differential_test;
+#[cfg(test)]
+#[path = "tests/migration_verification_test.rs"]
+mod migration_verification_test;

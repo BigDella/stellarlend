@@ -3,6 +3,7 @@ import * as lendingController from '../controllers/lending.controller';
 import {
   prepareValidation,
   submitValidation,
+  relayDelegatedValidation,
   paginationValidation,
 } from '../middleware/validation';
 
@@ -120,6 +121,12 @@ router.get('/prepare/:operation', prepareValidation, lendingController.prepare);
  */
 router.post('/submit', submitValidation, lendingController.submit);
 
+router.post(
+  '/relay-delegated',
+  relayDelegatedValidation,
+  lendingController.relayDelegated
+);
+
 /**
  * @openapi
  * /lending/transactions/{userAddress}:
@@ -212,5 +219,26 @@ router.get(
  *               $ref: '#/components/schemas/TransactionHistoryItem'
  */
 router.get('/transactions/:userAddress/stream', lendingController.streamTransactionHistory);
+
+/**
+ * @openapi
+ * /lending/liquidation-price/{asset}:
+ *   get:
+ *     summary: Get TWAP-based liquidation price
+ *     description: Returns the manipulation-resistant TWAP liquidation price for an asset with fallback to median across sources.
+ *     tags:
+ *       - Lending
+ *     parameters:
+ *       - in: path
+ *         name: asset
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Asset contract address
+ *     responses:
+ *       200:
+ *         description: TWAP-based liquidation price
+ */
+router.get('/liquidation-price/:asset', lendingController.getLiquidationPrice);
 
 export default router;

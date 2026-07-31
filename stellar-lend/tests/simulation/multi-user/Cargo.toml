@@ -1,0 +1,17 @@
+[package]
+name = "multi-user-simulation"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+tokio = { version = "1", features = ["full"] }
+rand = "0.8"
+statrs = "0.16"
+
+[[bin]]
+name = "simulator"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"

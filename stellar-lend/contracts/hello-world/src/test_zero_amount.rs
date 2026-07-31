@@ -4,6 +4,8 @@
 //! zero and negative amounts with clean reverts (returning the appropriate
 //! error variant), and that no state mutations occur on rejected operations.
 //!
+//! Also includes dust transaction handling tests.
+//!
 //! # Intended Semantics
 //!
 //! | Operation           | Zero / Negative Amount Behavior         |
@@ -13,6 +15,7 @@
 //! | `borrow_asset`      | Revert with `BorrowError::InvalidAmount` |
 //! | `repay_debt`        | Revert with `RepayError::InvalidAmount`  |
 //! | Liquidation (zero debt) | Returns `Ok(false)` / `Ok(0)`       |
+//! | Dust transactions   | Revert with `AmountBelowMinimum` error   |
 
 use super::*;
 use soroban_sdk::{testutils::Address as _, Address, Env};
@@ -705,4 +708,208 @@ fn test_negative_amount_all_operations() {
         client.try_repay_debt(&user, &None, &(-1)).is_err(),
         "Negative repay must fail"
     );
+}
+
+// ============================================================================
+// 7. DUST TRANSACTION TESTS
+// ============================================================================
+
+#[test]
+fn test_dust_deposit_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // Dust amount (below minimum threshold of 1)
+    let res = client.try_deposit_collateral(&user, &None, &0);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_dust_withdraw_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    client.deposit_collateral(&user, &None, &1000);
+    
+    // Dust amount (below minimum threshold of 1)
+    let res = client.try_withdraw_collateral(&user, &None, &0);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_dust_borrow_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    client.deposit_collateral(&user, &None, &10_000);
+    
+    // Dust amount (below minimum threshold of 1)
+    let res = client.try_borrow_asset(&user, &None, &0);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_dust_repay_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // Set up position with debt
+    env.as_contract(&contract_id, || {
+        let position_key = DepositDataKey::Position(user.clone());
+        let position = Position {
+            collateral: 10_000,
+            debt: 3000,
+            borrow_interest: 100,
+            last_accrual_time: env.ledger().timestamp(),
+        };
+        env.storage().persistent().set(&position_key, &position);
+    });
+
+    // Dust amount (below minimum threshold of 1)
+    let res = client.try_repay_debt(&user, &None, &0);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_dust_sweep_no_dust_to_sweep() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // No dust accumulated - sweep should fail
+    let res = client.try_sweep_deposit_dust(&user, &contract_id);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_dust_accumulation_prevention() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // Multiple dust transactions should all be rejected
+    for _ in 0..10 {
+        let res = client.try_deposit_collateral(&user, &None, &0);
+        assert!(res.is_err());
+    }
+
+    // Verify no dust accumulation
+    let position = position_of(&env, &contract_id, &user);
+    assert!(position.is_none(), "No position should exist after dust attempts");
+}
+
+#[test]
+fn test_minimum_transaction_amount_enforcement() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // Valid minimum amount (1)
+    let res = client.try_deposit_collateral(&user, &None, &1);
+    assert!(res.is_ok(), "Minimum transaction amount of 1 should be accepted");
+
+    // Below minimum (0)
+    let res = client.try_deposit_collateral(&user, &None, &0);
+    assert!(res.is_err(), "Amount below minimum should be rejected");
+}
+
+#[test]
+fn test_dust_between_valid_transactions() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(HelloContract, ());
+    let client = HelloContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+
+    // First valid deposit
+    client.deposit_collateral(&user, &None, &1000);
+
+    // Dust attempt (should fail)
+    let _ = client.try_deposit_collateral(&user, &None, &0);
+
+    // Second valid deposit
+    client.deposit_collateral(&user, &None, &500);
+
+    // Verify balance is sum of valid deposits only
+    let balance = collateral_balance(&env, &contract_id, &user);
+    assert_eq!(balance, 1500, "Dust should not affect balance");
+}
+
+// ============================================================================
+// 8. ROUNDING DIRECTION CONSISTENCY TESTS
+// ============================================================================
+
+#[test]
+fn test_rounding_direction_consistency() {
+    // Test that rounding is depositor-friendly
+    // Deposits: round down (depositor keeps more)
+    // Withdrawals: round up (user receives at least what they expect)
+    
+    // This is a conceptual test - actual implementation uses rounding.rs module
+    // The key invariant: withdraw_amount >= repay_amount for same fraction
+    let balance = 1000;
+    let fraction = 3333; // 33.33%
+    let scale = 10000;
+
+    // Withdraw should round up
+    let withdraw = (balance * fraction + scale - 1) / scale;
+    
+    // Repay should round down
+    let repay = (balance * fraction) / scale;
+
+    assert!(withdraw >= repay, "Withdraw should be >= repay for same fraction");
+}
+
+#[test]
+fn test_precision_loss_in_interest_calculation() {
+    // Test that small amounts don't lose precision in interest calculations
+    let principal = 1; // Minimum amount
+    let rate = 500; // 5% in basis points
+    let scale = 10000;
+
+    // Interest calculation: principal * rate / scale
+    let interest = (principal * rate) / scale;
+    
+    // With minimum principal, interest should be 0 (rounds down)
+    assert_eq!(interest, 0, "Small principal may result in zero interest due to rounding");
+}
+
+#[test]
+fn test_rounding_asymmetry_prevention() {
+    // Test that rounding doesn't create arbitrage opportunities
+    let amount = 1000;
+    let fraction = 5000; // 50%
+    let scale = 10000;
+
+    // Calculate with different rounding directions
+    let round_down = (amount * fraction) / scale;
+    let round_up = (amount * fraction + scale - 1) / scale;
+
+    // For exact fractions, both should be equal
+    assert_eq!(round_down, round_up, "Exact fractions should have same result");
+
+    // For inexact fractions, round_up > round_down
+    let inexact_fraction = 3333;
+    let round_down_inexact = (amount * inexact_fraction) / scale;
+    let round_up_inexact = (amount * inexact_fraction + scale - 1) / scale;
+    
+    assert!(round_up_inexact >= round_down_inexact, "Round up should be >= round down");
 }

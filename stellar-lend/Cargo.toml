@@ -3,17 +3,77 @@ resolver = "2"
 members = [
   "benchmarks",
   "client",
+  "packages/oracle-client",
+  "packages/test-framework",
   "contracts/amm",
   "contracts/bridge",
   "contracts/common",
+  "contracts/shared-deadline",
+  "contracts/delegation-registry",
   "contracts/hello-world",
   "contracts/lending",
+  "contracts/lending-core",
+  "contracts/lending-types",
+  "contracts/lending-interest",
+  "contracts/lending-risk",
+  "contracts/safe-math",
+  "contracts/math",
   "contracts/stablecoin",
+  "contracts/institutional-wallet",
+  "contracts/migration-hub",
+  "contracts/test-utils",
+  "tests/migration",
+  "contracts/stealth-address",
+  "contracts/privacy-pool",
+  "contracts/reputation-system",
+  "contracts/copy-lending",
+  "contracts/dispute-resolution",
+  "contracts/credit-delegation",
+  "contracts/core",
+  "contracts/shared-signatures",
+  "contracts/margin",
+  "contracts/swap-router",
+  "contracts/parameter-store",
+  "contracts/oracle-hub",
+  "contracts/liquidation-strategy",
+  "contracts/sns-integration",
+  "contracts/referral-program",
+  "contracts/insurance-marketplace",
+  "contracts/token-adapter",
+  "contracts/compliance",
+  "contracts/leveraged-yield",
+  "contracts/position-manager",
+  "contracts/principal-token",
+  "contracts/yield-token",
+  "contracts/yield-splitter",
+  "contracts/vault-share",
+  "contracts/auto-compound-vault",
+  "contracts/risk-scoring",
+  "contracts/pool-interfaces",
+  "contracts/yield-router",
+  "contracts/shared-events",
+  "contracts/dutch-auction",
+  "contracts/debt-token",
+  "contracts/shared-math",
+  "contracts/shared-storage",
+  "contracts/earnings-reinvest",
+  "contracts/twap-oracle",
+  "tests/simulation/multi-user",
+  "tests/integration/flash-loan-liquidation",
 ]
-exclude = ["fuzz"]
+exclude = [
+  "fuzz",
+  "formal-verification/safe-math-proofs",
+  "formal-verification/interest-rate-model-proofs",
+  "formal-verification/liquidation-math-proofs",
+]
+
+[workspace.lints.rust]
 
 [workspace.dependencies]
-soroban-sdk = "23.4.1"
+soroban-sdk = "27.0.2"
+stellarlend-safe-math = { path = "contracts/safe-math" }
+stellarlend-math = { path = "contracts/math" }
 soroban-token-sdk = { version = "23.4.1" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -33,3 +93,9 @@ codegen-units = 1
 [profile.release-with-logs]
 inherits = "release"
 debug-assertions = true
+
+[profile.dev]
+incremental = true
+
+[profile.test]
+incremental = true

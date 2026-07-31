@@ -813,3 +813,204 @@ fn test_liquidate_position_consistency() {
     // Collateral should be reduced
     assert_eq!(collateral_balance, initial_collateral - collateral_seized);
 }
+
+// =============================================================================
+// PARTIAL LIQUIDATION WITH PENALTY DIFFERENTIATION TESTS (Issue #173)
+// =============================================================================
+
+/// Test that dynamic penalty equals base incentive when health factor is just below threshold
+#[test]
+fn test_dynamic_penalty_near_threshold() {
+    let env = create_test_env();
+    let (contract_id, _admin, _client) = setup_contract_with_admin(&env);
+
+    env.as_contract(&contract_id, || {
+        // health_factor = 10499 bps (just below 10500 threshold)
+        // severity is tiny → penalty should be very close to base (1000 bps)
+        let collateral = 10499i128;
+        let debt = 10000i128;
+        let penalty =
+            crate::liquidate::calculate_dynamic_penalty(&env, collateral, debt).unwrap();
+        // base = 1000, max = 2000, threshold = 10500
+        // severity = (10500 - 10499) / 10500 ≈ 0.0001
+        // extra ≈ 0.0001 * 1000 ≈ 0
+        assert!(penalty >= 1000, "penalty should be >= base incentive");
+        assert!(penalty <= 2000, "penalty should not exceed max cap");
+        // Near threshold: penalty should be very close to base
+        assert!(penalty <= 1010, "near-threshold penalty should be close to base");
+    });
+}
+
+/// Test that dynamic penalty is higher for a severely undercollateralized position
+#[test]
+fn test_dynamic_penalty_severe_undercollateralization() {
+    let env = create_test_env();
+    let (contract_id, _admin, _client) = setup_contract_with_admin(&env);
+
+    env.as_contract(&contract_id, || {
+        // health_factor = 5000 bps (50% — very severe)
+        let collateral = 5000i128;
+        let debt = 10000i128;
+        let penalty =
+            crate::liquidate::calculate_dynamic_penalty(&env, collateral, debt).unwrap();
+        // severity = (10500 - 5000) / 10500 ≈ 0.524
+        // extra ≈ 0.524 * 1000 ≈ 524
+        // penalty ≈ 1524
+        assert!(penalty > 1000, "severe position should have higher penalty than base");
+        assert!(penalty <= 2000, "penalty should not exceed max cap");
+        assert!(penalty >= 1400, "severe position should have significantly elevated penalty");
+    });
+}
+
+/// Test that dynamic penalty is capped at MAX_PENALTY_BPS (2000 bps = 20%)
+#[test]
+fn test_dynamic_penalty_capped_at_maximum() {
+    let env = create_test_env();
+    let (contract_id, _admin, _client) = setup_contract_with_admin(&env);
+
+    env.as_contract(&contract_id, || {
+        // health_factor = 100 bps (nearly insolvent)
+        let collateral = 100i128;
+        let debt = 10000i128;
+        let penalty =
+            crate::liquidate::calculate_dynamic_penalty(&env, collateral, debt).unwrap();
+        assert_eq!(penalty, 2000, "nearly-insolvent position should hit the 2000 bps cap");
+    });
+}
+
+/// Test that penalty scales monotonically: more severe → higher penalty
+#[test]
+fn test_dynamic_penalty_monotonically_increases_with_severity() {
+    let env = create_test_env();
+    let (contract_id, _admin, _client) = setup_contract_with_admin(&env);
+
+    env.as_contract(&contract_id, || {
+        let debt = 10000i128;
+        // health factors: 10400 > 8000 > 5000 > 2000 (all below 10500 threshold)
+        let hf_mild = 10400i128;
+        let hf_moderate = 8000i128;
+        let hf_severe = 5000i128;
+        let hf_critical = 2000i128;
+
+        let p_mild =
+            crate::liquidate::calculate_dynamic_penalty(&env, hf_mild, debt).unwrap();
+        let p_moderate =
+            crate::liquidate::calculate_dynamic_penalty(&env, hf_moderate, debt).unwrap();
+        let p_severe =
+            crate::liquidate::calculate_dynamic_penalty(&env, hf_severe, debt).unwrap();
+        let p_critical =
+            crate::liquidate::calculate_dynamic_penalty(&env, hf_critical, debt).unwrap();
+
+        assert!(p_mild <= p_moderate, "moderate should have >= penalty than mild");
+        assert!(p_moderate <= p_severe, "severe should have >= penalty than moderate");
+        assert!(p_severe <= p_critical, "critical should have >= penalty than severe");
+    });
+}
+
+/// Test partial liquidation leaves position in consistent state when still unhealthy
+#[test]
+#[ignore] // Native XLM liquidation not yet supported
+fn test_partial_liquidation_position_still_unhealthy() {
+    let env = create_test_env();
+    let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+    let borrower = Address::generate(&env);
+    let liquidator = Address::generate(&env);
+
+    // Deeply undercollateralized: collateral=500, debt=1000 (50% ratio)
+    create_liquidatable_position(&env, &contract_id, &borrower, 500, 1000);
+
+    // Liquidate only 10% of debt — position remains unhealthy
+    let (debt_liquidated, collateral_seized, incentive) =
+        client.liquidate(&liquidator, &borrower, &None, &None, &100);
+
+    assert_eq!(debt_liquidated, 100);
+    assert!(incentive > 0, "incentive must be positive");
+    assert!(collateral_seized > debt_liquidated, "seized includes incentive bonus");
+
+    // Position should still exist and have remaining debt
+    let position = get_user_position(&env, &contract_id, &borrower).unwrap();
+    assert_eq!(position.debt, 900, "remaining debt should be 900");
+
+    // Collateral balance should be reduced by seized amount
+    let remaining_collateral = get_collateral_balance(&env, &contract_id, &borrower);
+    assert_eq!(remaining_collateral, 500 - collateral_seized);
+}
+
+/// Test partial liquidation that brings position back to healthy state
+#[test]
+#[ignore] // Native XLM liquidation not yet supported
+fn test_partial_liquidation_restores_health() {
+    let env = create_test_env();
+    let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+    let borrower = Address::generate(&env);
+    let liquidator = Address::generate(&env);
+
+    // Slightly undercollateralized: collateral=1040, debt=1000 (104% ratio, below 105% threshold)
+    create_liquidatable_position(&env, &contract_id, &borrower, 1040, 1000);
+
+    // Liquidate 50% (close factor) — should bring position back to health
+    let (debt_liquidated, _collateral_seized, incentive) =
+        client.liquidate(&liquidator, &borrower, &None, &None, &500);
+
+    assert_eq!(debt_liquidated, 500);
+    assert!(incentive > 0);
+
+    // Remaining debt = 500, collateral still > 500 → healthy
+    let position = get_user_position(&env, &contract_id, &borrower).unwrap();
+    assert_eq!(position.debt, 500);
+}
+
+/// Test that penalty for mild undercollateralization is lower than for severe
+#[test]
+#[ignore] // Native XLM liquidation not yet supported
+fn test_partial_liquidation_penalty_differentiation() {
+    let env = create_test_env();
+    let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+    // Mild: health factor ~104% (just below 105% threshold)
+    let mild_borrower = Address::generate(&env);
+    create_liquidatable_position(&env, &contract_id, &mild_borrower, 1040, 1000);
+
+    // Severe: health factor ~50%
+    let severe_borrower = Address::generate(&env);
+    create_liquidatable_position(&env, &contract_id, &severe_borrower, 500, 1000);
+
+    let liquidator = Address::generate(&env);
+
+    let (_d1, _c1, incentive_mild) =
+        client.liquidate(&liquidator, &mild_borrower, &None, &None, &100);
+    let (_d2, _c2, incentive_severe) =
+        client.liquidate(&liquidator, &severe_borrower, &None, &None, &100);
+
+    // Same debt amount liquidated, but severe position should yield higher incentive
+    assert!(
+        incentive_severe >= incentive_mild,
+        "severe position should yield >= incentive: severe={incentive_severe}, mild={incentive_mild}"
+    );
+}
+
+/// Integration: verify liquidation event contains correct penalty data
+#[test]
+#[ignore] // Native XLM liquidation not yet supported
+fn test_partial_liquidation_event_emitted_with_penalty() {
+    let env = create_test_env();
+    let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+
+    let borrower = Address::generate(&env);
+    let liquidator = Address::generate(&env);
+
+    create_liquidatable_position(&env, &contract_id, &borrower, 500, 1000);
+
+    let (debt_liquidated, collateral_seized, incentive) =
+        client.liquidate(&liquidator, &borrower, &None, &None, &200);
+
+    // All return values must be positive and consistent
+    assert!(debt_liquidated > 0);
+    assert!(collateral_seized >= debt_liquidated);
+    assert!(incentive > 0);
+    // incentive = debt_liquidated * penalty_bps / 10000
+    // For 50% health factor, penalty > 1000 bps, so incentive > 2% of debt
+    assert!(incentive >= debt_liquidated / 100);
+}

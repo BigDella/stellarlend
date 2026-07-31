@@ -181,8 +181,8 @@ export class PriceHistoryService {
     let weightedSum = 0n;
 
     for (let i = 0; i < periodEntries.length - 1; i++) {
-      const current = periodEntries[i];
-      const next = periodEntries[i + 1];
+      const current = periodEntries[i]!;
+      const next = periodEntries[i + 1]!;
 
       const timeDiff = next.timestamp - current.timestamp;
       totalTime += timeDiff;
@@ -190,7 +190,7 @@ export class PriceHistoryService {
     }
 
     // Add the last entry's contribution (assume it lasts until now)
-    const lastEntry = periodEntries[periodEntries.length - 1];
+    const lastEntry = periodEntries[periodEntries.length - 1]!;
     const lastTimeDiff = now - lastEntry.timestamp;
     totalTime += lastTimeDiff;
     weightedSum += lastEntry.price * BigInt(lastTimeDiff);
@@ -207,7 +207,7 @@ export class PriceHistoryService {
       twap,
       periodSeconds,
       dataPoints: periodEntries.length,
-      startTime: periodEntries[0].timestamp,
+      startTime: periodEntries[0]!.timestamp,
       endTime: lastEntry.timestamp,
     };
 

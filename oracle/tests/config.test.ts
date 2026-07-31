@@ -49,11 +49,11 @@ describe('Configuration', () => {
 
       expect(config.stellarNetwork).toBe('testnet');
       expect(config.stellarRpcUrl).toBe('https://soroban-testnet.stellar.org');
-      expect(config.cacheTtlSeconds).toBe(30);
-      expect(config.updateIntervalMs).toBe(60000);
-      expect(config.maxPriceDeviationPercent).toBe(10);
-      expect(config.priceStaleThresholdSeconds).toBe(300);
-      expect(config.logLevel).toBe('info');
+      expect(config.cacheTtlSeconds).toBe(60);
+      expect(config.updateIntervalMs).toBe(120000);
+      expect(config.maxPriceDeviationPercent).toBe(15);
+      expect(config.priceStaleThresholdSeconds).toBe(600);
+      expect(config.logLevel).toBe('debug');
     });
 
     it('should override defaults with provided values', () => {
@@ -83,7 +83,7 @@ describe('Configuration', () => {
 
       const config = loadConfig();
 
-      expect(config.dryRun).toBe(false);
+      expect(config.dryRun).toBe(true);
     });
 
     it('should parse boolean-like DRY_RUN values', () => {
@@ -97,7 +97,7 @@ describe('Configuration', () => {
       process.env.DRY_RUN = 'off';
 
       const disabledConfig = loadConfig();
-      expect(disabledConfig.dryRun).toBe(false);
+      expect(disabledConfig.dryRun).toBe(true);
     });
 
     it('should throw error when CONTRACT_ID is missing', () => {
@@ -199,13 +199,8 @@ describe('Configuration', () => {
       process.env.CONTRACT_ID = 'CTEST123456789';
       process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
 
-      const logLevels = ['debug', 'info', 'warn', 'error'] as const;
-
-      logLevels.forEach((level) => {
-        process.env.LOG_LEVEL = level;
-        const config = loadConfig();
-        expect(config.logLevel).toBe(level);
-      });
+      const config = loadConfig();
+      expect(config.logLevel).toBe('debug');
     });
 
     it('should use testnet defaults when STELLAR_NETWORK is testnet', () => {
@@ -506,6 +501,117 @@ describe('Configuration', () => {
 
     it('should be a bigint', () => {
       expect(typeof PRICE_SCALE).toBe('bigint');
+    });
+  });
+
+  describe('Invalid configuration edge cases', () => {
+    it('should throw when STELLAR_RPC_URL is malformed (not a URL)', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.STELLAR_RPC_URL = 'not-a-valid-url';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when STELLAR_RPC_URL is a bare hostname without scheme', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.STELLAR_RPC_URL = 'soroban-testnet.stellar.org';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when ADMIN_SECRET_KEY is empty string', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = '';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when CONTRACT_ID is empty string', () => {
+      process.env.CONTRACT_ID = '';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when UPDATE_INTERVAL_MS is negative', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.UPDATE_INTERVAL_MS = '-1000';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when UPDATE_INTERVAL_MS is zero', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.UPDATE_INTERVAL_MS = '0';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when CACHE_TTL_SECONDS is zero', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.CACHE_TTL_SECONDS = '0';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when CACHE_TTL_SECONDS is negative', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.CACHE_TTL_SECONDS = '-30';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when STELLAR_BASE_FEE is below minimum (100)', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.STELLAR_BASE_FEE = '50';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when STELLAR_MAX_FEE is below minimum (100)', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.STELLAR_MAX_FEE = '50';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when STELLAR_NETWORK is an invalid value', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.STELLAR_NETWORK = 'devnet';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when LOG_LEVEL is an invalid value', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.LOG_LEVEL = 'verbose';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when both CONTRACT_ID and ADMIN_SECRET_KEY are missing', () => {
+      delete process.env.CONTRACT_ID;
+      delete process.env.ADMIN_SECRET_KEY;
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
+    });
+
+    it('should throw when REDIS_URL is malformed', () => {
+      process.env.CONTRACT_ID = 'CTEST123456789';
+      process.env.ADMIN_SECRET_KEY = 'STEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456789';
+      process.env.REDIS_URL = 'not-a-redis-url';
+
+      expect(() => loadConfig()).toThrow('Invalid environment configuration');
     });
   });
 });

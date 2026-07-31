@@ -1,43 +1,51 @@
-# Zero-Amount Operation Semantics
+# Zero-Amount And Dust Semantics
 
-This document specifies the expected behavior of all amount-bearing operations
-in the StellarLend contracts when called with zero or negative amounts.
+This document defines the amount-handling rules added for issue #380.
 
-## Core Lending Operations
+## Amount Rules
 
-All core lending operations **reject** amounts ≤ 0 with their respective
-`InvalidAmount` error variants. No state mutations occur on rejection.
+The lending contract rejects all zero or negative amount-bearing operations:
 
-| Operation              | Zero / Negative Amount Result              |
-|------------------------|--------------------------------------------|
-| `deposit_collateral`   | `Err(DepositError::InvalidAmount)`         |
-| `withdraw_collateral`  | `Err(WithdrawError::InvalidAmount)`        |
-| `borrow_asset`         | `Err(BorrowError::InvalidAmount)`          |
-| `repay_debt`           | `Err(RepayError::InvalidAmount)`           |
+| Operation | Rule |
+| --- | --- |
+| Deposit | `amount <= 0` is rejected with `DepositError::InvalidAmount` |
+| Borrow | `amount <= 0` or `collateral_amount <= 0` is rejected with `BorrowError::InvalidAmount` |
+| Repay | `amount <= 0` is rejected with `BorrowError::InvalidAmount` |
+| Withdraw | `amount <= 0` is rejected with `WithdrawError::InvalidAmount` |
 
-### Invariants
+Configured minimum amounts are treated as dust thresholds. A positive amount
+below the relevant minimum is dust and is rejected before any state mutation.
 
-1. **No state mutation**: When an operation returns an error, storage (balances,
-   positions, analytics) must remain exactly as before the call.
-2. **Clean revert**: The operation returns a typed `Result::Err`, not an
-   unhandled panic or abort.
-3. **Composability**: A rejected zero-amount operation must not corrupt state
-   for subsequent valid operations.
+## Dust Prevention
 
-## Risk Management / Liquidation Functions
+Deposits, borrows, and withdrawals already have configured minimum sizes.
+The implementation now also prevents withdrawals and repayments from leaving
+small residual balances:
 
-These functions accept zero values and handle them gracefully:
+- A withdrawal that would leave a non-zero deposit balance below
+  `MinWithdrawAmount` is rejected with `WithdrawError::DustAmount`.
+- A repayment that would leave a non-zero debt balance below
+  `BorrowMinAmount` is rejected with `BorrowError::DustAmount`.
 
-| Function                            | Zero-Value Behavior                       |
-|-------------------------------------|-------------------------------------------|
-| `can_be_liquidated(_, 0)`           | `Ok(false)` — no debt means not liquidatable |
-| `can_be_liquidated(0, debt)`        | `Ok(true)` — zero collateral is liquidatable |
-| `can_be_liquidated(0, 0)`           | `Ok(false)` — no debt means not liquidatable |
-| `get_max_liquidatable_amount(0)`    | `Ok(0)` — nothing to liquidate             |
-| `get_liquidation_incentive_amount(0)` | `Ok(0)` — no incentive for zero amount   |
-| `require_min_collateral_ratio(_, 0)`| `Ok(())` — no debt always satisfies ratio  |
+These checks are constant-time comparisons and run after arithmetic validation
+but before saving updated state.
 
-## References
+## Dust Sweep
 
-- **Issue**: [#385 - Zero-Amount Operation Handling Tests](https://github.com/StellarLend/stellarlend-contracts/issues/385)
-- **Test module**: `stellar-lend/contracts/hello-world/src/test_zero_amount.rs`
+Users can clear existing dust that may have been created before a policy
+change, migration, or manual recovery:
+
+- `sweep_deposit_dust(user, asset)` withdraws the user's full deposit balance
+  only when it is positive and below `MinWithdrawAmount`.
+- `sweep_debt_dust(user, asset)` repays the user's full debt balance only when
+  it is positive and below `BorrowMinAmount`.
+
+Both sweep functions reject non-dust balances with the same `DustAmount` error
+so they cannot be used to bypass normal minimum transaction sizes.
+
+## Rounding Direction
+
+Interest accrual uses depositor-friendly ceiling division: if a positive
+interest calculation has any remainder, it rounds up by one unit instead of
+rounding down to zero. Zero elapsed time and zero principal still accrue zero
+interest.

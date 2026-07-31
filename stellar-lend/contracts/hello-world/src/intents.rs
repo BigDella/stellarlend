@@ -8,6 +8,7 @@
 #![allow(unused)]
 
 use soroban_sdk::{contracterror, contracttype, Address, Env, IntoVal, Symbol, Val, Vec};
+use stellarlend_shared_deadline::require_deadline;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -51,10 +52,7 @@ pub fn require_intent_auth(
     expires_at: u64,
     args: Vec<Val>,
 ) -> Result<(), IntentError> {
-    let now = env.ledger().timestamp();
-    if now > expires_at {
-        return Err(IntentError::Expired);
-    }
+    require_deadline(env, expires_at, IntentError::Expired)?;
 
     let expected = next_nonce(env, user, op);
     if nonce != expected {

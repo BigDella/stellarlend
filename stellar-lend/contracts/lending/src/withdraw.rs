@@ -1,6 +1,7 @@
 use soroban_sdk::{contracterror, contracttype, Address, Env};
 
 use crate::deposit::{DepositCollateral, DepositDataKey};
+use crate::dust::is_dust_amount;
 
 pub use crate::events::WithdrawEvent;
 
@@ -15,6 +16,7 @@ pub enum WithdrawError {
     InsufficientCollateral = 4,
     InsufficientCollateralRatio = 5,
     Unauthorized = 6,
+    DustAmount = 7,
 }
 
 /// Storage keys for withdraw-related data
@@ -44,7 +46,19 @@ pub fn withdraw(
     asset: Address,
     amount: i128,
 ) -> Result<i128, WithdrawError> {
-    user.require_auth();
+    withdraw_with_auth(env, user, asset, amount, true)
+}
+
+pub(crate) fn withdraw_with_auth(
+    env: &Env,
+    user: Address,
+    asset: Address,
+    amount: i128,
+    require_auth: bool,
+) -> Result<i128, WithdrawError> {
+    if require_auth {
+        user.require_auth();
+    }
 
     if is_paused(env) || crate::pause::is_paused(env, crate::pause::PauseType::Withdraw) {
         return Err(WithdrawError::WithdrawPaused);
@@ -69,6 +83,9 @@ pub fn withdraw(
         .amount
         .checked_sub(amount)
         .ok_or(WithdrawError::Overflow)?;
+    if is_dust_amount(new_amount, min_withdraw) {
+        return Err(WithdrawError::DustAmount);
+    }
 
     validate_collateral_ratio_after_withdraw(env, &user, new_amount)?;
 
@@ -136,6 +153,10 @@ pub fn initialize_withdraw_settings(
     env: &Env,
     min_withdraw_amount: i128,
 ) -> Result<(), WithdrawError> {
+    if min_withdraw_amount <= 0 {
+        return Err(WithdrawError::InvalidAmount);
+    }
+
     env.storage()
         .persistent()
         .set(&WithdrawDataKey::MinWithdrawAmount, &min_withdraw_amount);
@@ -143,6 +164,44 @@ pub fn initialize_withdraw_settings(
         .persistent()
         .set(&WithdrawDataKey::Paused, &false);
     Ok(())
+}
+
+pub fn sweep_deposit_dust(env: &Env, user: Address, asset: Address) -> Result<i128, WithdrawError> {
+    user.require_auth();
+
+    if is_paused(env) || crate::pause::is_paused(env, crate::pause::PauseType::Withdraw) {
+        return Err(WithdrawError::WithdrawPaused);
+    }
+
+    let min_withdraw = get_min_withdraw_amount(env);
+    let position = get_collateral_position(env, &user, &asset);
+    if !is_dust_amount(position.amount, min_withdraw) {
+        return Err(WithdrawError::DustAmount);
+    }
+
+    let updated_position = DepositCollateral {
+        amount: 0,
+        asset: asset.clone(),
+        last_deposit_time: position.last_deposit_time,
+    };
+    save_collateral_position(env, &user, &updated_position);
+
+    let total_deposits = get_total_deposits(env);
+    let new_total = total_deposits
+        .checked_sub(position.amount)
+        .ok_or(WithdrawError::Overflow)?;
+    set_total_deposits(env, new_total);
+
+    WithdrawEvent {
+        user,
+        asset,
+        amount: position.amount,
+        remaining_balance: 0,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(position.amount)
 }
 
 /// Set withdraw pause state

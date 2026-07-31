@@ -4,6 +4,10 @@ import cors from 'cors';
 import rateLimit, { MemoryStore } from 'express-rate-limit';
 import { config } from './config';
 import { bodySizeLimitMiddleware } from './middleware/bodySizeLimit';
+// Versioned domain route imports (v1)
+import v1Routes from './routes/v1';
+
+// Legacy route imports for backward compatibility
 import lendingRoutes from './routes/lending.routes';
 import healthRoutes from './routes/health.routes';
 import protocolRoutes from './routes/protocol.routes';
@@ -14,16 +18,68 @@ import stakingRoutes from './routes/staking.routes';
 import transactionRoutes from './routes/transaction.routes';
 import merkleRoutes from './routes/merkle.routes';
 import zkProofRoutes from './routes/zkProof.routes';
+import verificationRoutes from './routes/verification.routes';
+import configRoutes from './routes/config.routes';
+import analyticsRoutes from './routes/analytics.routes';
+import gasUsageAnalyticsRoutes from './routes/gasUsageAnalytics.routes';
+import poolPerformanceRoutes from './routes/poolPerformance.routes';
+import migrationRoutes from './routes/migration.routes';
+import ratesRoutes from './routes/rates.routes';
+import crossProtocolRoutes from './routes/crossProtocol.routes';
+import developerRoutes from './routes/developer.routes';
+import mevRoutes from './routes/mev.routes';
+import reputationRoutes from './routes/reputation.routes';
+import socialRoutes from './routes/social.routes';
+import notificationRoutes from './routes/notification.routes';
+import disputeRoutes from './routes/dispute.routes';
+import creditRoutes from './routes/credit.routes';
+import nonceRoutes from './routes/nonce.routes';
+import riskEngineRoutes from './routes/riskEngine.routes';
+import yieldCurveRoutes from './routes/yieldCurve.routes';
+import rateForecastRoutes from './routes/rateForecast.routes';
+import liquidationDashboardRoutes from './routes/liquidationDashboard.routes';
+import opportunityExplorerRoutes from './routes/opportunityExplorer.routes';
+import { treasuryRoutes } from './routes/treasury.routes';
+import auditFindingsRoutes from './routes/audit-findings.routes';
+import securityRoutes from './routes/security.routes';
+import { invariantMonitorService } from './services/invariant-monitor';
+import { SupplyCheck } from './services/invariant-monitor/checks/supply.check';
+import { HealthCheck } from './services/invariant-monitor/checks/health.check';
+import metricsRoutes from './routes/metrics.routes';
+import referralRoutes from './routes/referral.routes';
+import snsRoutes from './routes/sns.routes';
+import simulatorRoutes from './routes/simulator.routes';
+import emergencyRoutes from './routes/emergency.routes';
+import liquidationProfitCalculatorRoutes from './routes/liquidationProfitCalculator.routes';
+import tvlDecompositionRoutes from './routes/tvlDecomposition.routes';
+import userBehaviorAnalyticsRoutes from './routes/userBehaviorAnalytics.routes';
+import pnlRoutes from './routes/pnl.routes';
+import insuranceRoutes from './routes/insurance.routes';
+import plannerRoutes from './routes/planner.routes';
+import feeTierRoutes from './routes/fee-tiers.routes';
+import reinvestmentRoutes from './routes/reinvestment.routes';
+import dutchAuctionRoutes from './routes/dutchAuction.routes';
+import autoCompoundVaultRoutes from './routes/autoCompoundVault.routes';
+import riskScoringRoutes from './routes/riskScoring.routes';
+import collateralRatioRoutes from './routes/collateralRatio.routes';
+import complianceRoutes from './routes/v1/compliance';
+
+import compression from 'compression';
 import { errorHandler } from './middleware/errorHandler';
 import { idempotencyMiddleware } from './middleware/idempotency';
-import { swaggerSpec } from './config/swagger';
+import { resetSensitiveRateLimits, sensitiveOperationRateLimiter } from './middleware/rate-limit';
+import { swaggerSpec, versionListHandler, v1Spec } from './config/swagger';
+import { versionMiddleware, legacyCompatibilityMiddleware } from './middleware/versioning';
 import logger from './utils/logger';
 import { requestIdMiddleware } from './middleware/requestId';
+import { requestLogger } from './middleware/requestLogger';
 import { sanitizeInput } from './middleware/sanitizeInput';
+import { fieldSelectionMiddleware } from './middleware/fieldSelection';
 import { redisCacheService } from './services/redisCache.service';
 
 const app: Application = express();
 app.use(requestIdMiddleware);
+app.use(requestLogger);
 
 const ipRateLimitStore = new MemoryStore();
 const userRateLimitStore = new MemoryStore();
@@ -38,6 +94,15 @@ app.use(
   })
 );
 
+// Compress responses (gzip/deflate/br) when the client supports it.
+// `threshold` skips compressing tiny responses where the gzip overhead
+// would outweigh the bandwidth savings.
+app.use(
+  compression({
+    threshold: 1024, // don't bother compressing responses under 1KB
+  })
+);
+
 // Enforce HTTPS in production
 if (config.server.env === 'production') {
   app.use((req, res, next) => {
@@ -48,11 +113,33 @@ if (config.server.env === 'production') {
   });
 }
 
-app.use(cors());
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    const allowed = config.cors.allowedOrigins;
+    // Allow server-to-server (no Origin header) and wildcard in non-production
+    if (!origin || allowed.includes('*') || allowed.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin '${origin}' not allowed`));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Authorization',
+    'Content-Type',
+    'Idempotency-Key',
+    'X-API-Key',
+    'X-Developer-Id',
+    'X-User-Address',
+  ],
+};
+app.use(cors(corsOptions));
 app.use(express.json({ limit: config.bodySizeLimit.limit }));
 app.use(express.urlencoded({ extended: true, limit: config.bodySizeLimit.limit }));
 app.use(sanitizeInput);
 app.use(bodySizeLimitMiddleware);
+app.use(fieldSelectionMiddleware);
 
 const limiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
@@ -91,26 +178,111 @@ app.use('/api/docs', (req: Request, res: Response, next: NextFunction) => {
     .catch(next);
 });
 
+// ─── API Version listing ──────────────────────────────────────────────────
+app.get('/api/versions', versionListHandler);
+
+// ─── OpenAPI specs per version ────────────────────────────────────────────
+app.get('/api/v1/openapi.json', (_req, res) => {
+  res.json(v1Spec);
+});
+
 app.get('/api/openapi.json', (_req, res) => {
+  // Legacy: return the v1 spec with deprecation notice
+  res.setHeader('X-API-Deprecated', 'true');
+  res.setHeader('X-API-Migrate-To', '/api/v1/openapi.json');
   res.json(swaggerSpec);
 });
 
-app.use('/api/health', healthRoutes);
-app.use('/api/protocol', protocolRoutes);
-app.use('/api/lending', idempotencyMiddleware, userRateLimiter, lendingRoutes);
-app.use('/api/subscriptions', subscriptionRoutes);
-app.use('/api/portfolio', portfolioRoutes);
-app.use('/api/gas', userRateLimiter, gasRoutes);
-app.use('/api/staking', stakingRoutes);
-app.use('/api/transactions', transactionRoutes);
-app.use('/api/merkle', merkleRoutes);
-app.use('/api/zk', zkProofRoutes);
+// ─── Versioned v1 domain routes ──────────────────────────────────────────
+// All v1 routes are mounted under /api/v1 with version headers
+app.use('/api/v1', versionMiddleware({ version: 'v1' }), v1Routes);
+
+// ─── Legacy route compatibility (deprecated) ─────────────────────────────
+// These routes are preserved for backward compatibility.
+// Clients receive deprecation headers and should migrate to /api/v1/* paths.
+
+const legacyLendingCompat = legacyCompatibilityMiddleware('/api/v1/lending');
+const legacyProtocolCompat = legacyCompatibilityMiddleware('/api/v1/protocol');
+const legacyGovernanceCompat = legacyCompatibilityMiddleware('/api/v1/governance');
+const legacyAccountCompat = legacyCompatibilityMiddleware('/api/v1/account');
+const legacySystemCompat = legacyCompatibilityMiddleware('/api/v1/system');
+const legacySecurityCompat = legacyCompatibilityMiddleware('/api/v1/security');
+
+app.use('/api/developer', legacySystemCompat, developerRoutes);
+app.use('/api/health', legacySystemCompat, healthRoutes);
+app.use('/api/protocol', legacyProtocolCompat, protocolRoutes);
+app.use(
+  '/api/lending',
+  legacyLendingCompat,
+  idempotencyMiddleware,
+  userRateLimiter,
+  sensitiveOperationRateLimiter,
+  lendingRoutes
+);
+app.use('/api/subscriptions', legacyAccountCompat, subscriptionRoutes);
+app.use('/api/portfolio', legacyAccountCompat, portfolioRoutes);
+app.use('/api/gas', legacyLendingCompat, userRateLimiter, gasRoutes);
+app.use('/api/staking', legacyGovernanceCompat, stakingRoutes);
+app.use('/api/transactions', legacyAccountCompat, transactionRoutes);
+app.use('/api/merkle', legacySecurityCompat, merkleRoutes);
+app.use('/api/zk', legacySecurityCompat, zkProofRoutes);
+app.use('/api/verification', legacySecurityCompat, verificationRoutes);
+app.use('/api/config', legacySystemCompat, configRoutes);
+app.use('/api/analytics', legacySystemCompat, analyticsRoutes);
+app.use('/api/analytics/gas', legacySystemCompat, gasUsageAnalyticsRoutes);
+app.use('/api/pool-performance', legacySystemCompat, poolPerformanceRoutes);
+app.use('/api/migration', legacySystemCompat, migrationRoutes);
+app.use('/api/rates', legacySystemCompat, ratesRoutes);
+app.use('/api/cross-protocol', legacySystemCompat, crossProtocolRoutes);
+app.use('/api/mev', legacySecurityCompat, mevRoutes);
+app.use('/api/reputation', reputationRoutes);
+app.use('/api/social', socialRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/disputes', disputeRoutes);
+app.use('/api/credit', creditRoutes);
+app.use('/api/nonce', nonceRoutes);
+app.use('/api/risk', riskEngineRoutes);
+app.use('/api/yield-curve', yieldCurveRoutes);
+app.use('/api/rates', rateForecastRoutes);
+app.use('/api/liquidations', liquidationDashboardRoutes);
+app.use('/api/liquidations', opportunityExplorerRoutes);
+app.use('/api/treasury', treasuryRoutes);
+app.use('/api/audit-findings', auditFindingsRoutes);
+app.use('/api/security-reports', securityRoutes);
+app.use('/api/metrics', legacySystemCompat, metricsRoutes);
+app.use('/api/referral', referralRoutes);
+app.use('/api/sns', snsRoutes);
+app.use('/api/simulator', simulatorRoutes);
+app.use('/api/emergency', emergencyRoutes);
+app.use('/api/liquidations', liquidationProfitCalculatorRoutes);
+app.use('/api/analytics/tvl', tvlDecompositionRoutes);
+app.use('/api/analytics/users', userBehaviorAnalyticsRoutes);
+app.use('/api/pnl', pnlRoutes);
+app.use('/api/insurance', insuranceRoutes);
+app.use('/api/planner', plannerRoutes);
+app.use('/api/fee-tiers', feeTierRoutes);
+app.use('/api/reinvestment', reinvestmentRoutes);
+app.use('/api/auctions', dutchAuctionRoutes);
+app.use('/api/vault', autoCompoundVaultRoutes);
+app.use('/api/risk-scoring', riskScoringRoutes);
+app.use('/api/collateral-ratio', collateralRatioRoutes);
+app.use('/api/compliance', complianceRoutes);
 
 app.use(errorHandler);
 
-void redisCacheService.warmup();
+void redisCacheService.warmup(async () => {
+  const { StellarService } = await import('./services/stellar.service.js');
+  const svc = new StellarService();
+  await svc.getProtocolStats();
+  
+  // Initialize invariant monitor
+  invariantMonitorService.registerCheck(new SupplyCheck());
+  invariantMonitorService.registerCheck(new HealthCheck());
+  invariantMonitorService.start(60000); // 1 minute interval
+});
 
 export async function resetRateLimiters(): Promise<void> {
+  resetSensitiveRateLimits();
   await Promise.all([ipRateLimitStore.resetAll(), userRateLimitStore.resetAll()]);
 }
 

@@ -6,34 +6,39 @@ on:
     paths:
       - "stellar-lend/contracts/**"
       - "stellar-lend/benchmarks/**"
+      - "scripts/gas_benchmark_report.py"
       - ".github/workflows/gas-benchmarks.yml"
   pull_request:
     branches: ["main", "dev"]
     paths:
       - "stellar-lend/contracts/**"
       - "stellar-lend/benchmarks/**"
+      - "scripts/gas_benchmark_report.py"
       - ".github/workflows/gas-benchmarks.yml"
-  # Allow manual trigger for on-demand profiling
   workflow_dispatch:
     inputs:
       compare_baseline:
-        description: "Compare against baseline (true/false)"
+        description: "Compare against baseline and enforce the 10% regression gate"
         required: false
         default: "true"
+=======
+on: workflow_dispatch
+>>>>>>> main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Gas Benchmark Job
-  # ─────────────────────────────────────────────────────────────────────────────
   gas-benchmarks:
-    name: Gas Benchmarks — All Contracts
+    name: Gas Benchmarks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CARGO_TERM_COLOR: always
+      BENCHMARK_RESULTS: stellar-lend/benchmark-results.json
+      BENCHMARK_DASHBOARD: stellar-lend/benchmark-dashboard.md
+      BENCHMARK_HISTORY: stellar-lend/benchmark-history.jsonl
 
     steps:
       - name: Checkout code
@@ -44,7 +49,7 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Cache cargo registry & build
+      - name: Cache cargo registry and build artifacts
         uses: actions/cache@v4
         with:
           path: |
@@ -59,47 +64,39 @@ jobs:
       - name: Build benchmark suite
         run: |
           cd stellar-lend
-          cargo build --bin run_benchmarks --release 2>&1 | tee benchmark-build.log
-          echo "Build exit code: $?"
+          cargo build -p stellarlend-benchmarks --release 2>&1 | tee benchmark-build.log
 
       - name: Run gas benchmarks
-        id: run_benchmarks
         run: |
           cd stellar-lend
-          cargo run --bin run_benchmarks -- \
+          cargo run -p stellarlend-benchmarks --bin run_benchmarks --release -- \
             --output benchmark-results.json \
             2>&1 | tee benchmark-output.log
-          echo "Benchmark exit code: $?"
 
-      - name: Run benchmarks with baseline comparison
-        id: baseline_check
-        if: ${{ github.event.inputs.compare_baseline != 'false' }}
+      - name: Generate dashboard and enforce gates
+        env:
+          COMPARE_BASELINE: ${{ inputs.compare_baseline || 'true' }}
         run: |
-          cd stellar-lend
-          # Use baseline from repo if it exists and has results
-          BASELINE="benchmarks/baseline.json"
-          RESULTS=$(python3 -c "import json; d=json.load(open('$BASELINE')); print(len(d.get('results', [])))" 2>/dev/null || echo "0")
-
-          if [ "$RESULTS" -gt "0" ]; then
-            echo "Comparing against baseline ($RESULTS recorded operations)..."
-            cargo run --bin run_benchmarks -- \
-              --compare "$BASELINE" \
-              --output benchmark-results.json \
-              2>&1 | tee benchmark-comparison.log
-            EXIT_CODE=$?
-            if [ $EXIT_CODE -ne 0 ]; then
-              echo "::error::Gas regression detected! See benchmark-comparison.log for details."
-              exit $EXIT_CODE
-            fi
-            echo "All operations within gas budgets."
-          else
-            echo "No baseline results found — skipping regression check."
-            echo "Run benchmarks locally and commit baseline.json to enable regression detection."
+          EXTRA_ARGS=""
+          if [ "$COMPARE_BASELINE" = "true" ]; then
+            EXTRA_ARGS="--baseline stellar-lend/benchmarks/baseline.json --fail-on-regression"
           fi
 
-      - name: Generate benchmark summary
+          python3 scripts/gas_benchmark_report.py \
+            --results "$BENCHMARK_RESULTS" \
+            --coverage stellar-lend/benchmarks/public-functions.json \
+            --dashboard "$BENCHMARK_DASHBOARD" \
+            --history stellar-lend/benchmarks/history.jsonl \
+            --history-out "$BENCHMARK_HISTORY" \
+            --max-regression-pct 10 \
+            $EXTRA_ARGS
+
+      - name: Publish benchmark dashboard
         if: always()
         run: |
+          if [ -f "$BENCHMARK_DASHBOARD" ]; then
+            cat "$BENCHMARK_DASHBOARD" >> "$GITHUB_STEP_SUMMARY"
+          fi
           cd stellar-lend
           if [ -f benchmark-results.json ]; then
             echo "## Gas Benchmark Results" >> $GITHUB_STEP_SUMMARY
@@ -128,49 +125,27 @@ jobs:
               failed = report["failed"]
               out.write(f"\n**Total:** {total} | **Passed:** {passed} | **Failed:** {failed}\n")
           EOF
+          
+          # Also append markdown report to summary if available
+          if [ -f benchmark-results.md ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            cat benchmark-results.md >> $GITHUB_STEP_SUMMARY
+          fi
           fi
 
-      - name: Upload benchmark results
+      - name: Upload benchmark artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gas-benchmark-results-${{ github.sha }}
           path: |
             stellar-lend/benchmark-results.json
+            stellar-lend/benchmark-dashboard.md
+            stellar-lend/benchmark-history.jsonl
+            stellar-lend/benchmark-results.md
+            stellar-lend/benchmarks/history.json
             stellar-lend/benchmark-output.log
-            stellar-lend/benchmark-comparison.log
+            stellar-lend/benchmark-build.log
+          if-no-files-found: warn
           retention-days: 90
-
-      - name: Upload build log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-build-log
-          path: stellar-lend/benchmark-build.log
-
-      # ── Budget Alert Gate ──────────────────────────────────────────────────
-      - name: Enforce gas budget gate
-        if: always()
-        run: |
-          cd stellar-lend
-          if [ ! -f benchmark-results.json ]; then
-            echo "::error::benchmark-results.json not found — benchmarks may have failed to run."
-            exit 1
-          fi
-
-          FAILED=$(python3 -c "
-          import json
-          with open('benchmark-results.json') as f:
-              r = json.load(f)
-          over = [x for x in r['results'] if not x['within_budget'] and x['budget'] > 0]
-          for o in over:
-              print(f\"  {o['operation']}: {o['instructions']:,} instructions (budget: {o['budget']:,})\")
-          print(len(over))
-          " | tail -1)
-
-          if [ "$FAILED" -gt "0" ]; then
-            echo "::error::$FAILED operation(s) exceeded gas budget. See benchmark-results.json for details."
-            exit 1
-          fi
-
-          echo "All operations within gas budgets."

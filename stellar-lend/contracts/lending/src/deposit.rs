@@ -4,6 +4,7 @@ pub use crate::events::VaultDepositEvent;
 #[allow(dead_code)]
 pub type DepositEvent = VaultDepositEvent;
 
+use crate::dust::is_dust_amount;
 use crate::pause::{self, PauseType};
 use soroban_sdk::{contracterror, contracttype, Address, Env};
 
@@ -56,7 +57,19 @@ pub fn deposit(
     asset: Address,
     amount: i128,
 ) -> Result<i128, DepositError> {
-    user.require_auth();
+    deposit_with_auth(env, user, asset, amount, true)
+}
+
+pub(crate) fn deposit_with_auth(
+    env: &Env,
+    user: Address,
+    asset: Address,
+    amount: i128,
+    require_auth: bool,
+) -> Result<i128, DepositError> {
+    if require_auth {
+        user.require_auth();
+    }
 
     if pause::is_paused(env, PauseType::Deposit) {
         return Err(DepositError::DepositPaused);
@@ -67,7 +80,7 @@ pub fn deposit(
     }
 
     let min_deposit = get_min_deposit_amount(env);
-    if amount < min_deposit {
+    if is_dust_amount(amount, min_deposit) {
         return Err(DepositError::InvalidAmount);
     }
 
@@ -102,6 +115,10 @@ pub fn initialize_deposit_settings(
     deposit_cap: i128,
     min_deposit_amount: i128,
 ) -> Result<(), DepositError> {
+    if deposit_cap <= 0 || min_deposit_amount <= 0 {
+        return Err(DepositError::InvalidAmount);
+    }
+
     env.storage()
         .persistent()
         .set(&DepositDataKey::CapAmount, &deposit_cap);

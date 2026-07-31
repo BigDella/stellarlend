@@ -1,0 +1,25 @@
+{
+  "id": "luna-ust-collapse",
+  "name": "Luna/UST Collapse",
+  "description": "Algorithmic stablecoin death spiral wipes out $40B. Collateral value collapses to near-zero, triggering massive lending protocol liquidations.",
+  "category": "historical",
+  "version": "1.0.0",
+  "created": "2024-01-01T00:00:00Z",
+  "priceChanges": [
+    { "asset": "XLM", "changePercent": -60 },
+    { "asset": "BTC", "changePercent": -35 },
+    { "asset": "ETH", "changePercent": -40 },
+    { "asset": "USDC", "changePercent": -15 }
+  ],
+  "correlationShifts": [
+    { "asset1": "XLM", "asset2": "BTC", "newCorrelation": 0.9 },
+    { "asset1": "XLM", "asset2": "ETH", "newCorrelation": 0.9 }
+  ],
+  "volatilityMultipliers": [
+    { "asset": "XLM", "multiplier": 6.0 },
+    { "asset": "BTC", "multiplier": 3.0 },
+    { "asset": "ETH", "multiplier": 3.5 }
+  ],
+  "cascadingLiquidation": true,
+  "tags": ["stablecoin", "death-spiral", "contagion"]
+}

@@ -1,120 +1,91 @@
-# Smart Contract Fuzzing (Property-Based, Coverage-Guided)
+# Smart Contract Fuzzing
 
-This repo uses **coverage-guided fuzzing** (libFuzzer via `cargo-fuzz`) to explore smart-contract edge cases that unit tests rarely hit (state-machine sequencing, time jumps, oracle manipulation, boundary math).
+StellarLend uses coverage-guided fuzzing with `cargo-fuzz` and libFuzzer to exercise smart-contract state machines, edge-case accounting, ledger time jumps, oracle manipulation, and protocol invariants.
 
-The fuzz targets live under `stellar-lend/fuzz/`.
+The fuzz package lives under `stellar-lend/fuzz/`.
 
-## What is fuzzed
+## Targets
 
-Targets (one binary per contract area):
+| Target | Scope |
+| --- | --- |
+| `lending_critical` | Focused lending path coverage for deposit, borrow, repay, liquidate, oracle price shifts, and time jumps |
+| `lending_actions` | Broader lending state-machine coverage, including withdraw, pause toggles, oracle writes, and views |
+| `amm_actions` | AMM action coverage for swaps, liquidity changes, and pool views |
+| `bridge_actions` | Bridge message/action coverage |
 
-- `lending_actions` — state-machine fuzzing for `stellarlend-lending`
-- `amm_actions` — action fuzzing for `stellarlend-amm`
-- `bridge_actions` — action fuzzing for `bridge`
+Each target interprets input as a sequence of fixed-size 32-byte actions defined in `stellar-lend/fuzz/src/encoding.rs`.
 
-Each target interprets the input as a sequence of fixed-size **32-byte actions**. This gives libFuzzer structure to mutate while still keeping the harness lightweight.
+## Strategy
 
-## Strategy (high level)
+The harnesses map action bytes to protocol calls and assert invariants after state transitions. Lending fuzzing registers a fuzz-only oracle contract so inputs can mutate per-asset prices while the target calls collateral, debt, health-factor, and liquidation paths.
 
-### Action model (protocol-specific)
+Performance guardrails:
 
-For performance and coverage, the fuzzer uses a compact action encoding:
+- Inputs are capped to a bounded number of actions.
+- Ledger time deltas are capped per step.
+- Harnesses use `try_*` calls so expected rejections keep exploration moving.
+- `lending_critical` uses positive bounded amounts and over-collateralized borrow attempts to reach debt and liquidation states quickly.
 
-- One input file = `N` actions
-- One action = 32 bytes (see `stellar-lend/fuzz/src/encoding.rs`)
-
-Each harness maps those bytes to protocol calls (deposit/borrow/repay/withdraw, swaps/liquidity, bridge operations) and validates basic invariants after the sequence.
-
-### Time-dependent properties
-
-The harnesses mutate ledger time via `env.ledger().with_mut(|li| li.timestamp = ...)` to exercise:
-
-- interest accrual and timestamp math
-- deadline / timeout style checks
-
-### Oracle manipulation during fuzzing
-
-The lending fuzzer registers a fuzz-only oracle contract (`FuzzOracle`) and can change per-asset prices on the fly.
-
-This specifically targets view logic (collateral value, debt value, health factor) under adversarial price changes.
-
-### Large state spaces
-
-The `*_actions` targets are state-machine fuzzers. Inputs encode *sequences*, not single calls, so the fuzzer can reach deep interleavings:
-
-- borrow → time jump → repay partial → withdraw → view reads
-- pause toggles + retries
-- repeated protocol config changes
-
-### Performance guardrails
-
-To keep fuzzing fast and CI-friendly:
-
-- actions per input are bounded
-- time deltas are capped per step
-- harnesses use `try_*` contract calls where possible to avoid panics and keep exploration going
-
-## Custom mutators
-
-`lending_actions` implements a **custom libFuzzer mutator** in `stellar-lend/fuzz/fuzz_targets/lending_actions.rs`:
-
-- keeps inputs aligned to 32-byte action boundaries
-- performs small, field-aware mutations (kind/user/asset selectors, amount bytes, time bytes)
-- occasionally grows/shrinks by one full action to explore different sequence lengths
-
-This is intentionally protocol-aware: it helps libFuzzer spend more time exploring meaningful contract state transitions rather than breaking the input structure.
-
-## Corpus management
+## Corpus Management
 
 Seed corpora are checked into git:
 
+- `stellar-lend/fuzz/corpus/lending_critical/`
 - `stellar-lend/fuzz/corpus/lending_actions/`
 - `stellar-lend/fuzz/corpus/amm_actions/`
 - `stellar-lend/fuzz/corpus/bridge_actions/`
 
-A minimum corpus size is enforced by `scripts/fuzz/check_corpus.sh` (default: **10** files per target; configurable via `MIN_CORPUS_FILES`).
+`scripts/fuzz/check_corpus.sh` enforces a minimum of 10 non-empty files per target. Override with `MIN_CORPUS_FILES` when needed.
 
-## Running fuzzers locally
+## Run Locally
 
-Prereqs:
+Prerequisites:
 
-- Rust nightly (`rustup toolchain install nightly`)
-- `cargo-fuzz` (`cargo +nightly install cargo-fuzz`)
-- LLVM/clang toolchain (required by libFuzzer)
+- Rust nightly: `rustup toolchain install nightly`
+- cargo-fuzz: `cargo +nightly install cargo-fuzz --locked`
+- LLVM/clang for libFuzzer
 
-Run:
-
-```bash
-cd stellar-lend
-cargo +nightly fuzz run lending_actions -- -runs=50000 -timeout=5
-```
-
-Other targets:
+Run focused lending fuzzing:
 
 ```bash
 cd stellar-lend
-cargo +nightly fuzz run amm_actions -- -runs=50000 -timeout=5
-cargo +nightly fuzz run bridge_actions -- -runs=50000 -timeout=5
+cargo +nightly fuzz run lending_critical fuzz/corpus/lending_critical -- -max_total_time=1800 -timeout=15
 ```
 
-## Reproducing a crash
-
-When a crash is found, libFuzzer stores a reproducer in:
-
-`stellar-lend/fuzz/artifacts/<target>/`
-
-Use:
+Run smoke fuzzing for every target:
 
 ```bash
-./scripts/fuzz/repro.sh lending_actions stellar-lend/fuzz/artifacts/lending_actions/crash-* -- -runs=1
+bash scripts/fuzz/run_ci_smoke.sh
 ```
 
-## CI integration
+## Crash Triage
 
-CI runs a smoke fuzz pass (bounded number of executions per target) via:
+Replay a crash:
 
-- `scripts/fuzz/check_corpus.sh`
-- `scripts/fuzz/run_ci_smoke.sh`
+```bash
+./scripts/fuzz/repro.sh lending_critical stellar-lend/fuzz/artifacts/lending_critical/crash-* -- -runs=1
+```
 
-This keeps the pipeline deterministic while still exercising the fuzz harnesses continuously.
+Promote a crash to a regression corpus fixture and write replay notes:
 
+```bash
+./scripts/fuzz/triage_crash.sh lending_critical stellar-lend/fuzz/artifacts/lending_critical/crash-*
+```
+
+The triage script copies the input into `stellar-lend/fuzz/corpus/<target>/regression_<sha>` and writes a markdown report under `stellar-lend/fuzz/regressions/<target>/`.
+
+## Coverage Reports
+
+Generate coverage logs and a summary table:
+
+```bash
+./scripts/fuzz/coverage_report.sh lending_critical lending_actions
+```
+
+The report is written to `stellar-lend/fuzz/coverage/` and uploaded by CI with fuzz artifacts.
+
+## CI
+
+The regular CI pipeline keeps a quick smoke fuzz pass in `scripts/fuzz/run_ci_smoke.sh`.
+
+The dedicated long-running workflow is `.github/workflows/contract-fuzz.yml`. It runs each target with `-max_total_time=1800`, uploads crash artifacts, and generates per-target coverage reports.
