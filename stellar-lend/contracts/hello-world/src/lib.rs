@@ -753,6 +753,297 @@ impl HelloContract {
     // Analytics
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // Debt Token Marketplace — Secondary Trading  (Issue #787)
+    // -------------------------------------------------------------------------
+
+    /// Mint a new debt-position NFT.
+    pub fn dt_mint(
+        env: Env,
+        user: Address,
+        collateral_asset: Option<Address>,
+        principal: i128,
+        interest_rate_bps: i128,
+    ) -> Result<u64, LendingError> {
+        use crate::debt_token::{mint_debt_token, DebtTokenError};
+        mint_debt_token(&env, user, collateral_asset, principal, interest_rate_bps)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Direct transfer of a debt token.
+    pub fn dt_transfer(
+        env: Env,
+        from: Address,
+        to: Address,
+        token_id: u64,
+    ) -> Result<(), LendingError> {
+        use crate::debt_token::{transfer_debt_token, DebtTokenError};
+        transfer_debt_token(&env, from, to, token_id)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Burn a debt token (debt repaid/liquidated).
+    pub fn dt_burn(
+        env: Env,
+        user: Address,
+        token_id: u64,
+        reason: soroban_sdk::Symbol,
+    ) -> Result<(), LendingError> {
+        use crate::debt_token::{burn_debt_token, DebtTokenError};
+        burn_debt_token(&env, user, token_id, reason)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// List a debt token at a fixed price (with marketplace stats bookkeeping).
+    pub fn dt_list(
+        env: Env,
+        seller: Address,
+        token_id: u64,
+        price: i128,
+        payment_token: Address,
+    ) -> Result<(), LendingError> {
+        use crate::debt_token::list_debt_token_tracked;
+        list_debt_token_tracked(&env, seller, token_id, price, payment_token)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Cancel an active fixed-price listing.
+    pub fn dt_cancel_listing(
+        env: Env,
+        seller: Address,
+        token_id: u64,
+    ) -> Result<(), LendingError> {
+        use crate::debt_token::{cancel_listing, DebtTokenError};
+        cancel_listing(&env, seller, token_id)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Buy a listed debt token at its fixed asking price (with price discovery recording).
+    pub fn dt_buy(
+        env: Env,
+        buyer: Address,
+        token_id: u64,
+    ) -> Result<(), LendingError> {
+        use crate::debt_token::buy_listed_debt_token_tracked;
+        buy_listed_debt_token_tracked(&env, buyer, token_id)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Place a bid (purchase offer) on a debt token.
+    pub fn dt_place_bid(
+        env: Env,
+        bidder: Address,
+        token_id: u64,
+        price: i128,
+        payment_token: Address,
+        expires_at: u64,
+    ) -> Result<(), LendingError> {
+        use crate::debt_token::place_bid;
+        place_bid(&env, bidder, token_id, price, payment_token, expires_at)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Cancel an active bid.
+    pub fn dt_cancel_bid(
+        env: Env,
+        bidder: Address,
+        token_id: u64,
+    ) -> Result<(), LendingError> {
+        use crate::debt_token::cancel_bid;
+        cancel_bid(&env, bidder, token_id)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Accept a bidder's offer and transfer the token.
+    pub fn dt_accept_bid(
+        env: Env,
+        seller: Address,
+        token_id: u64,
+        bidder: Address,
+    ) -> Result<(), LendingError> {
+        use crate::debt_token::accept_bid;
+        accept_bid(&env, seller, token_id, bidder)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Read-only: get a specific bid.
+    pub fn dt_get_bid(
+        env: Env,
+        token_id: u64,
+        bidder: Address,
+    ) -> Option<crate::debt_token::DebtTokenBid> {
+        crate::debt_token::get_bid(&env, token_id, bidder)
+    }
+
+    /// Read-only: get all bidder addresses for a token.
+    pub fn dt_get_bidders(env: Env, token_id: u64) -> Vec<Address> {
+        crate::debt_token::get_bidders(&env, token_id)
+    }
+
+    /// Read-only: last traded price for a token.
+    pub fn dt_get_last_trade_price(
+        env: Env,
+        token_id: u64,
+    ) -> Option<crate::debt_token::TradePrice> {
+        crate::debt_token::get_last_trade_price(&env, token_id)
+    }
+
+    /// Read-only: TWAP over the last 20 trades for a token.
+    pub fn dt_get_twap(env: Env, token_id: u64) -> Option<i128> {
+        crate::debt_token::get_twap_price(&env, token_id)
+    }
+
+    /// Read-only: global marketplace analytics snapshot.
+    pub fn dt_get_marketplace_analytics(env: Env) -> crate::debt_token::MarketplaceStats {
+        crate::debt_token::get_marketplace_analytics(&env)
+    }
+
+    /// Read-only: bounded log of recent trades across all tokens.
+    pub fn dt_get_recent_trades(env: Env) -> Vec<crate::debt_token::TradeRecord> {
+        crate::debt_token::get_recent_trades(&env)
+    }
+
+    /// Read-only: get the active listing for a token (if any).
+    pub fn dt_get_listing(
+        env: Env,
+        token_id: u64,
+    ) -> Option<crate::debt_token::DebtTokenListing> {
+        crate::debt_token::get_listing(&env, token_id)
+    }
+
+    /// Read-only: get a user's debt token IDs.
+    pub fn dt_get_user_tokens(env: Env, user: Address) -> Vec<u64> {
+        crate::debt_token::get_user_debt_tokens(&env, &user)
+    }
+
+    /// Read-only: get a debt position.
+    pub fn dt_get_position(
+        env: Env,
+        token_id: u64,
+    ) -> Option<crate::debt_token::DebtPosition> {
+        crate::debt_token::get_debt_position(&env, token_id)
+    }
+
+    /// Read-only: total supply of debt tokens.
+    pub fn dt_total_supply(env: Env) -> u64 {
+        crate::debt_token::get_total_supply(&env)
+    }
+
+    // -------------------------------------------------------------------------
+    // Rate Limiter Administration  (Issue #790)
+    // -------------------------------------------------------------------------
+
+    /// Configure default rate-limit parameters for an operation (admin-only).
+    pub fn rl_configure_operation(
+        env: Env,
+        caller: Address,
+        op: soroban_sdk::Symbol,
+        cfg: rate_limiter::RateLimitConfig,
+    ) -> Result<(), LendingError> {
+        rate_limiter::configure_operation_limit(&env, caller, op, cfg)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Configure per-pool rate-limit override for an operation (admin-only).
+    pub fn rl_configure_pool(
+        env: Env,
+        caller: Address,
+        op: soroban_sdk::Symbol,
+        pool: Address,
+        cfg: rate_limiter::RateLimitConfig,
+    ) -> Result<(), LendingError> {
+        rate_limiter::configure_pool_limit(&env, caller, op, pool, cfg)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Enable/disable grace burst for a (user, operation) pair (admin-only).
+    pub fn rl_set_user_grace(
+        env: Env,
+        caller: Address,
+        user: Address,
+        op: soroban_sdk::Symbol,
+        enabled: bool,
+    ) -> Result<(), LendingError> {
+        rate_limiter::set_user_grace(&env, caller, user, op, enabled)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Configure congestion-based adaptive throttling (admin-only).
+    pub fn rl_configure_congestion(
+        env: Env,
+        caller: Address,
+        cfg: rate_limiter::CongestionConfig,
+    ) -> Result<(), LendingError> {
+        rate_limiter::configure_congestion(&env, caller, cfg)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Report network congestion index in bps — callable by congestion_reporter role.
+    pub fn rl_report_congestion(
+        env: Env,
+        caller: Address,
+        congestion_bps: i128,
+    ) -> Result<(), LendingError> {
+        rate_limiter::report_congestion(&env, caller, congestion_bps)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Read-only: current congestion adaptation state (for dashboards).
+    pub fn rl_get_congestion_state(env: Env) -> rate_limiter::CongestionState {
+        rate_limiter::get_congestion_state(&env)
+    }
+
+    /// Read-only: current effective rate-limit status for a user.
+    pub fn rl_get_user_status(
+        env: Env,
+        user: Address,
+        op: soroban_sdk::Symbol,
+        pool: Address,
+    ) -> rate_limiter::RateLimitStatus {
+        rate_limiter::get_user_status(&env, user, op, pool)
+    }
+
+    /// Read-only: current effective rate-limit status for the global pool bucket.
+    pub fn rl_get_global_status(
+        env: Env,
+        op: soroban_sdk::Symbol,
+        pool: Address,
+    ) -> rate_limiter::RateLimitStatus {
+        rate_limiter::get_global_status(&env, op, pool)
+    }
+
+    /// Read-only: aggregated analytics snapshot for an (op, pool) pair (Issue #790).
+    pub fn rl_get_analytics(
+        env: Env,
+        op: soroban_sdk::Symbol,
+        pool: Address,
+    ) -> rate_limiter::RateLimitAnalytics {
+        rate_limiter::get_rate_limit_analytics(&env, op, pool)
+    }
+
+    /// Admin-only: reset a user's rate-limit bucket to full capacity.
+    pub fn rl_reset_user_bucket(
+        env: Env,
+        caller: Address,
+        user: Address,
+        op: soroban_sdk::Symbol,
+        pool: Address,
+    ) -> Result<(), LendingError> {
+        rate_limiter::reset_user_bucket(&env, caller, user, op, pool)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Admin-only: reset the global-per-pool rate-limit bucket to full capacity.
+    pub fn rl_reset_global_bucket(
+        env: Env,
+        caller: Address,
+        op: soroban_sdk::Symbol,
+        pool: Address,
+    ) -> Result<(), LendingError> {
+        rate_limiter::reset_global_bucket(&env, caller, op, pool)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
     /// Read-only user health factor query (collateral/debt in basis points).
     pub fn get_health_factor(env: Env, user: Address) -> Result<i128, LendingError> {
         analytics::calculate_health_factor(&env, &user).map_err(Into::into)
@@ -785,6 +1076,98 @@ impl HelloContract {
         offset: u32,
     ) -> Result<Vec<analytics::ActivityEntry>, LendingError> {
         analytics::get_recent_activity(&env, limit, offset).map_err(Into::into)
+    }
+
+    /// Read-only: full real-time dashboard snapshot (Issue #795).
+    pub fn get_dashboard_snapshot(
+        env: Env,
+    ) -> Result<analytics::DashboardSnapshot, LendingError> {
+        analytics::get_dashboard_snapshot(&env).map_err(Into::into)
+    }
+
+    /// Read-only: risk-level distribution across sampled users (Issue #795).
+    pub fn get_risk_distribution(env: Env) -> analytics::RiskDistributionSummary {
+        analytics::get_risk_distribution(&env)
+    }
+
+    /// Read-only: protocol volume summary from activity log (Issue #795).
+    pub fn get_volume_summary(env: Env) -> analytics::VolumeSummary {
+        analytics::get_volume_summary(&env)
+    }
+
+    /// Record a historical metrics snapshot (callable by off-chain keeper).
+    pub fn record_metrics_snapshot(
+        env: Env,
+    ) -> Result<analytics::MetricsSnapshot, LendingError> {
+        analytics::record_metrics_snapshot(&env).map_err(Into::into)
+    }
+
+    /// Read-only: metrics snapshot history (oldest-first).
+    pub fn get_metrics_history(env: Env) -> Vec<analytics::MetricsSnapshot> {
+        analytics::get_metrics_history(&env)
+    }
+
+    /// Read-only: linear TVL forecast.
+    pub fn forecast_tvl(env: Env, periods_ahead: u32) -> Result<i128, LendingError> {
+        analytics::forecast_tvl(&env, periods_ahead).map_err(Into::into)
+    }
+
+    /// Admin-only: configure a metric alert threshold.
+    pub fn set_metric_alert_threshold(
+        env: Env,
+        admin: Address,
+        metric: soroban_sdk::Symbol,
+        threshold: i128,
+    ) -> Result<(), LendingError> {
+        analytics::set_metric_alert_threshold(&env, admin, metric, threshold)
+            .map_err(Into::into)
+    }
+
+    /// Read-only: all configured alert thresholds.
+    pub fn get_metric_alert_thresholds(
+        env: Env,
+    ) -> Vec<analytics::MetricAlertThreshold> {
+        analytics::get_metric_alert_thresholds(&env)
+    }
+
+    /// Read-only: triggered alert log.
+    pub fn get_triggered_alerts(env: Env) -> Vec<analytics::TriggeredAlert> {
+        analytics::get_triggered_alerts(&env)
+    }
+
+    /// Check current metrics against alert thresholds; returns breached metric names.
+    pub fn check_metric_alerts(env: Env) -> Result<Vec<soroban_sdk::Symbol>, LendingError> {
+        analytics::check_metric_alerts(&env).map_err(Into::into)
+    }
+
+    /// Record a collateral ratio snapshot for an asset.
+    pub fn record_collateral_ratio_snapshot(
+        env: Env,
+        asset: soroban_sdk::Symbol,
+        current_ratio: i128,
+        required_ratio: i128,
+        collateral_value: i128,
+        debt_value: i128,
+    ) -> Result<analytics::CollateralRatioSnapshot, LendingError> {
+        analytics::record_collateral_ratio_snapshot(
+            &env, asset, current_ratio, required_ratio, collateral_value, debt_value,
+        )
+        .map_err(Into::into)
+    }
+
+    /// Read-only: all current collateral ratio snapshots.
+    pub fn get_collateral_ratio_snapshots(
+        env: Env,
+    ) -> Vec<analytics::CollateralRatioSnapshot> {
+        analytics::get_collateral_ratio_snapshots(&env)
+    }
+
+    /// Read-only: historical collateral ratio trend for an asset.
+    pub fn get_collateral_ratio_history(
+        env: Env,
+        asset: soroban_sdk::Symbol,
+    ) -> Vec<analytics::CollateralRatioTrend> {
+        analytics::get_collateral_ratio_history(&env, asset)
     }
 
     /// Read-only: get next expected nonce for off-chain intents.

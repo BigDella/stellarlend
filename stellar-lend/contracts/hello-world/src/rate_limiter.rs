@@ -669,3 +669,112 @@ pub fn get_global_status(env: &Env, op: Symbol, pool: Address) -> RateLimitStatu
         grace_enabled: false,
     }
 }
+
+/// Admin-only: reset a specific user's rate-limit bucket for a given (op, pool) pair.
+///
+/// Useful for emergency unblocking after an accidental burst or a misconfigured client.
+/// Resetting sets the bucket back to full capacity, as if the user just joined the system.
+pub fn reset_user_bucket(
+    env: &Env,
+    caller: Address,
+    user: Address,
+    op: Symbol,
+    pool: Address,
+) -> Result<(), RateLimitError> {
+    admin::require_admin(env, &caller).map_err(|_| RateLimitError::Unauthorized)?;
+    let cfg = effective_config(env, &op, &pool);
+    let grace = is_grace_enabled(env, &user, &op);
+    let cap = capacity_tokens(&cfg, grace);
+    let key = RateLimitDataKey::UserBucket(user.clone(), op.clone(), pool.clone());
+    let fresh = BucketState {
+        tokens: cap,
+        last_refill: env.ledger().timestamp(),
+    };
+    set_bucket(env, &key, &fresh);
+    Ok(())
+}
+
+/// Admin-only: reset the global-per-pool bucket for a given (op, pool) pair.
+///
+/// Allows an admin to clear a temporarily saturated global bucket without
+/// redeploying the contract, for example after a mass-repayment event or during
+/// emergency protocol maintenance.
+pub fn reset_global_bucket(
+    env: &Env,
+    caller: Address,
+    op: Symbol,
+    pool: Address,
+) -> Result<(), RateLimitError> {
+    admin::require_admin(env, &caller).map_err(|_| RateLimitError::Unauthorized)?;
+    let cfg = effective_config(env, &op, &pool);
+    let cap = capacity_tokens(&cfg, false);
+    let key = RateLimitDataKey::GlobalBucket(op.clone(), pool.clone());
+    let fresh = BucketState {
+        tokens: cap,
+        last_refill: env.ledger().timestamp(),
+    };
+    set_bucket(env, &key, &fresh);
+    Ok(())
+}
+
+/// Aggregated per-operation analytics snapshot, for off-chain dashboards.
+///
+/// Reports the current effective limits (congestion-adjusted), the global bucket
+/// state, and a summary of congestion adaptation in force for a given (op, pool)
+/// pair. Intended to be consumed by the off-chain analytics API so operators can
+/// monitor rate-limit headroom without querying individual user buckets.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateLimitAnalytics {
+    /// The operation this snapshot covers.
+    pub op: Symbol,
+    /// The pool this snapshot covers.
+    pub pool: Address,
+    /// Effective (congestion-adjusted) configuration currently in force.
+    pub effective_config: RateLimitConfig,
+    /// Current global-per-pool bucket state.
+    pub global_bucket: BucketState,
+    /// Global bucket capacity tokens.
+    pub global_capacity_tokens: i128,
+    /// Tokens remaining in the global bucket as a fraction of capacity (0–10000 bps).
+    pub global_fill_bps: i128,
+    /// Current congestion adaptation state.
+    pub congestion: CongestionState,
+    /// Ledger timestamp of this snapshot.
+    pub snapshot_at: u64,
+}
+
+/// Read-only: produce a `RateLimitAnalytics` snapshot for a given (op, pool) pair.
+///
+/// This is the primary hook for the off-chain analytics API endpoint
+/// (`GET /api/rate-limit/analytics`).  It does NOT modify any state.
+pub fn get_rate_limit_analytics(env: &Env, op: Symbol, pool: Address) -> RateLimitAnalytics {
+    let cfg = effective_config(env, &op, &pool);
+    let cap = capacity_tokens(&cfg, false);
+    let key = RateLimitDataKey::GlobalBucket(op.clone(), pool.clone());
+    let bucket = get_or_init_bucket(env, &key, cap);
+
+    // Compute fill fraction in basis-points (0 = empty, 10_000 = full).
+    let fill_bps = if cap == 0 {
+        0
+    } else {
+        // Clamp to [0, 10_000].
+        let raw = bucket
+            .tokens
+            .saturating_mul(BPS_SCALE)
+            .checked_div(cap)
+            .unwrap_or(0);
+        raw.max(0).min(BPS_SCALE)
+    };
+
+    RateLimitAnalytics {
+        op,
+        pool,
+        effective_config: cfg,
+        global_bucket: bucket,
+        global_capacity_tokens: cap,
+        global_fill_bps: fill_bps,
+        congestion: get_congestion_state(env),
+        snapshot_at: env.ledger().timestamp(),
+    }
+}

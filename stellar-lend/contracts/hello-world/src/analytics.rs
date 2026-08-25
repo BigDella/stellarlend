@@ -1209,3 +1209,189 @@ fn check_metric_alerts_internal(env: &Env, snapshot: &MetricsSnapshot) -> Vec<Sy
 
     fired
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Real-Time Dashboard Aggregation  (Issue #795)
+//
+// Adds a single `get_dashboard_snapshot` function that bundles all panels of
+// the protocol analytics dashboard into one read-only call, minimising the
+// number of round-trips required by the off-chain API layer. It pulls:
+//   • Protocol-wide metrics (TVL, utilization, avg rate, users, txns)
+//   • Collateral ratio snapshots for all tracked assets
+//   • Active metric alerts currently in breach
+//   • Most-recent N activity log entries
+//
+// Everything here is purely read-only — no state mutation occurs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Default number of recent-activity entries surfaced in the dashboard panel.
+const DASHBOARD_ACTIVITY_LIMIT: u32 = 20;
+
+/// Aggregated dashboard snapshot bundling all real-time dashboard panels.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DashboardSnapshot {
+    /// Current protocol-wide metrics.
+    pub protocol: ProtocolMetrics,
+    /// Collateral ratio snapshots for all tracked assets.
+    pub collateral_ratios: Vec<CollateralRatioSnapshot>,
+    /// Metric names whose alert threshold is currently breached.
+    pub active_alerts: Vec<Symbol>,
+    /// Most-recent `DASHBOARD_ACTIVITY_LIMIT` activity entries.
+    pub recent_activity: Vec<ActivityEntry>,
+    /// Timestamp when this snapshot was assembled.
+    pub generated_at: u64,
+}
+
+/// Produce a full real-time dashboard snapshot in a single contract call.
+///
+/// Designed to be the primary data source for the protocol analytics dashboard
+/// described in Issue #795. All sub-reads are independent; partial failures
+/// (e.g. no collateral data yet) degrade gracefully to empty collections rather
+/// than returning an error.
+pub fn get_dashboard_snapshot(env: &Env) -> Result<DashboardSnapshot, AnalyticsError> {
+    let protocol = get_protocol_stats(env)?;
+    let collateral_ratios = get_collateral_ratio_snapshots(env);
+    let active_alerts = check_metric_alerts(env).unwrap_or_else(|_| Vec::new(env));
+    let recent_activity = get_recent_activity(env, DASHBOARD_ACTIVITY_LIMIT, 0)
+        .unwrap_or_else(|_| Vec::new(env));
+
+    Ok(DashboardSnapshot {
+        protocol,
+        collateral_ratios,
+        active_alerts,
+        recent_activity,
+        generated_at: env.ledger().timestamp(),
+    })
+}
+
+/// Return a summary of per-user risk distribution across the protocol.
+///
+/// Iterates the activity log to collect unique users, computes each user's
+/// health factor, and buckets them by risk level (1–5). Returns counts per
+/// bucket and the total users sampled. This is the data source for the
+/// "Risk Distribution" panel on the dashboard.
+///
+/// # Note
+/// Because Soroban has no native iteration over all storage keys, this
+/// function is limited to users visible in the bounded activity log. A full
+/// enumeration would require a separate user-index maintained by the deposit
+/// module — that is out of scope here (see PR description for #795).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RiskDistributionSummary {
+    /// Total unique users sampled from the activity log.
+    pub users_sampled: u32,
+    /// Count of users at risk level 1 (health ≥ 1.5×, low risk).
+    pub level_1: u32,
+    /// Count of users at risk level 2 (health ≥ 1.2×).
+    pub level_2: u32,
+    /// Count of users at risk level 3 (health ≥ 1.1×).
+    pub level_3: u32,
+    /// Count of users at risk level 4 (health ≥ 1.05×).
+    pub level_4: u32,
+    /// Count of users at risk level 5 (health < 1.05×, critical).
+    pub level_5: u32,
+}
+
+pub fn get_risk_distribution(env: &Env) -> RiskDistributionSummary {
+    let activity_log: Vec<ActivityEntry> = env
+        .storage()
+        .persistent()
+        .get::<AnalyticsDataKey, Vec<ActivityEntry>>(&AnalyticsDataKey::ActivityLog)
+        .unwrap_or_else(|| Vec::new(env));
+
+    // Deduplicate users using a simple visited-list (Vec used as a set —
+    // acceptable at dashboard sample sizes; a Map would require XDR overhead).
+    let mut seen: Vec<crate::deposit::DepositDataKey> = Vec::new(env);
+    let mut summary = RiskDistributionSummary {
+        users_sampled: 0,
+        level_1: 0,
+        level_2: 0,
+        level_3: 0,
+        level_4: 0,
+        level_5: 0,
+    };
+
+    for i in 0..activity_log.len() {
+        let entry = match activity_log.get(i) {
+            Some(e) => e,
+            None => continue,
+        };
+        let user_key = crate::deposit::DepositDataKey::Position(entry.user.clone());
+        // Skip if already counted.
+        if seen.contains(&user_key) {
+            continue;
+        }
+        seen.push_back(user_key);
+
+        let health = calculate_health_factor(env, &entry.user).unwrap_or(i128::MAX);
+        let level = calculate_user_risk_level(health);
+        summary.users_sampled = summary.users_sampled.saturating_add(1);
+        match level {
+            1 => summary.level_1 = summary.level_1.saturating_add(1),
+            2 => summary.level_2 = summary.level_2.saturating_add(1),
+            3 => summary.level_3 = summary.level_3.saturating_add(1),
+            4 => summary.level_4 = summary.level_4.saturating_add(1),
+            _ => summary.level_5 = summary.level_5.saturating_add(1),
+        }
+    }
+
+    summary
+}
+
+/// Summarise total borrow/deposit/withdrawal/repayment volumes aggregated from
+/// the activity log. Used by the "Volume" panel on the dashboard.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VolumeSummary {
+    pub total_deposit_volume: i128,
+    pub total_borrow_volume: i128,
+    pub total_withdrawal_volume: i128,
+    pub total_repayment_volume: i128,
+    pub total_liquidation_volume: i128,
+    pub entry_count: u32,
+}
+
+pub fn get_volume_summary(env: &Env) -> VolumeSummary {
+    let activity_log: Vec<ActivityEntry> = env
+        .storage()
+        .persistent()
+        .get::<AnalyticsDataKey, Vec<ActivityEntry>>(&AnalyticsDataKey::ActivityLog)
+        .unwrap_or_else(|| Vec::new(env));
+
+    let mut summary = VolumeSummary {
+        total_deposit_volume: 0,
+        total_borrow_volume: 0,
+        total_withdrawal_volume: 0,
+        total_repayment_volume: 0,
+        total_liquidation_volume: 0,
+        entry_count: activity_log.len() as u32,
+    };
+
+    for i in 0..activity_log.len() {
+        let entry = match activity_log.get(i) {
+            Some(e) => e,
+            None => continue,
+        };
+        let name = entry.activity_type.to_string();
+        if name == "deposit" {
+            summary.total_deposit_volume =
+                summary.total_deposit_volume.saturating_add(entry.amount);
+        } else if name == "borrow" {
+            summary.total_borrow_volume =
+                summary.total_borrow_volume.saturating_add(entry.amount);
+        } else if name == "withdraw" {
+            summary.total_withdrawal_volume =
+                summary.total_withdrawal_volume.saturating_add(entry.amount);
+        } else if name == "repay" {
+            summary.total_repayment_volume =
+                summary.total_repayment_volume.saturating_add(entry.amount);
+        } else if name == "liquidate" {
+            summary.total_liquidation_volume =
+                summary.total_liquidation_volume.saturating_add(entry.amount);
+        }
+    }
+
+    summary
+}
