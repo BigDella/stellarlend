@@ -33,6 +33,7 @@ pub mod storage;
 pub mod treasury;
 pub mod types;
 pub mod withdraw;
+pub mod amm;
 
 use crate::deposit::Position;
 use crate::errors::LendingError;
@@ -1024,6 +1025,212 @@ impl HelloContract {
         freeze: bool,
     ) -> Result<(), LendingError> {
         cross_asset::freeze_pool(&env, caller, asset, freeze).map_err(Into::into)
+    }
+
+    // -------------------------------------------------------------------------
+    // AMM-Lending Integration: LP Wrapping & Auto-Allocation
+    // -------------------------------------------------------------------------
+
+    /// Initialise the AMM-lending module (admin-only, once).
+    pub fn amm_initialize(env: Env, admin: Address) -> Result<(), LendingError> {
+        amm::initialize_amm_lending(&env, admin)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Wrap lending pool deposits into AMM LP positions.
+    pub fn amm_wrap_deposit(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        amount: i128,
+        amm_protocol: Address,
+    ) -> Result<amm::LpTokenPosition, LendingError> {
+        amm::wrap_deposit_to_lp(&env, admin, asset, amount, amm_protocol)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Unwrap LP tokens back into lending pool assets.
+    pub fn amm_unwrap_deposit(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        lp_tokens: i128,
+    ) -> Result<i128, LendingError> {
+        amm::unwrap_lp_to_deposit(&env, admin, asset, lp_tokens)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Return the LP token balance for an asset.
+    pub fn amm_get_lp_balance(env: Env, asset: Address) -> i128 {
+        amm::get_lp_token_balance(&env, &asset)
+    }
+
+    /// Set the withdrawal buffer BPS for an asset (admin-only).
+    pub fn amm_set_withdrawal_buffer(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        buffer_bps: i128,
+    ) -> Result<(), LendingError> {
+        amm::set_withdrawal_buffer(&env, admin, asset, buffer_bps)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Record accrued LP fees for an asset (admin-only).
+    pub fn amm_record_lp_fees(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        fee_amount: i128,
+    ) -> Result<(), LendingError> {
+        amm::record_lp_fees(&env, admin, asset, fee_amount)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Auto-compound accrued LP fees back into the LP position for a single asset.
+    ///
+    /// Returns the total amount compounded (0 when nothing was accrued).
+    pub fn amm_compound_lp_fees(
+        env: Env,
+        admin: Address,
+        asset: Address,
+    ) -> Result<i128, LendingError> {
+        amm::compound_lp_fees(&env, admin, asset)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Calculate optimal AMM allocation given current pool utilization.
+    pub fn amm_calculate_optimal_allocation(
+        env: Env,
+        asset: Address,
+        total_liquidity: i128,
+        borrowed_amount: i128,
+    ) -> Result<amm::AllocationSuggestion, LendingError> {
+        amm::calculate_optimal_allocation(&env, &asset, total_liquidity, borrowed_amount)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Execute automated AMM rebalancing based on pool utilization.
+    pub fn amm_auto_rebalance(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        total_liquidity: i128,
+        borrowed_amount: i128,
+        current_amm_balance: i128,
+    ) -> Result<i128, LendingError> {
+        amm::auto_rebalance_allocation(
+            &env,
+            admin,
+            asset,
+            total_liquidity,
+            borrowed_amount,
+            current_amm_balance,
+        )
+        .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Run the pool allocation optimizer across a set of pool addresses and
+    /// return per-pool rebalancing recommendations.
+    pub fn amm_optimize_allocation(
+        env: Env,
+        pools: Vec<Address>,
+    ) -> Result<amm::OptimizationResult, LendingError> {
+        amm::optimize_allocation(&env, &pools)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Update the impermanent-loss tracking snapshot for an asset.
+    /// Returns `true` when the IL alert threshold has been crossed.
+    pub fn amm_update_il_tracking(
+        env: Env,
+        asset: Address,
+        current_price: i128,
+    ) -> Result<bool, LendingError> {
+        amm::update_il_tracking(&env, &asset, current_price)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Return the current IL snapshot for an asset, or `None` if not tracked.
+    pub fn amm_get_il_snapshot(env: Env, asset: Address) -> Option<amm::IlSnapshot> {
+        amm::get_il_snapshot(&env, &asset)
+    }
+
+    /// Update the utilization snapshot for a pool.
+    pub fn amm_update_pool_utilization(env: Env, asset: Address, utilization_bps: i128) {
+        amm::update_pool_utilization(&env, &asset, utilization_bps);
+    }
+
+    /// Return the current utilization snapshot for a pool.
+    pub fn amm_get_pool_utilization(env: Env, asset: Address) -> i128 {
+        amm::get_pool_utilization(&env, &asset)
+    }
+
+    // -------------------------------------------------------------------------
+    // Yield Farming Strategy Optimizer (#789)
+    // -------------------------------------------------------------------------
+
+    /// Create a new named yield farming strategy for the admin.
+    ///
+    /// Returns the newly assigned `strategy_id`.
+    pub fn yield_create_strategy(
+        env: Env,
+        admin: Address,
+        name: String,
+        objective: amm::YieldStrategyObjective,
+        risk: amm::YieldStrategyRisk,
+        compounding_interval: amm::CompoundingInterval,
+        pools: Vec<Address>,
+    ) -> Result<u64, LendingError> {
+        amm::create_yield_strategy(&env, admin, name, objective, risk, compounding_interval, pools)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Retrieve a previously created strategy by ID.
+    pub fn yield_get_strategy(
+        env: Env,
+        admin: Address,
+        strategy_id: u64,
+    ) -> Option<amm::YieldStrategy> {
+        amm::get_yield_strategy(&env, &admin, strategy_id)
+    }
+
+    /// Activate or deactivate a yield farming strategy (admin-only).
+    pub fn yield_set_strategy_active(
+        env: Env,
+        admin: Address,
+        strategy_id: u64,
+        active: bool,
+    ) -> Result<(), LendingError> {
+        amm::set_yield_strategy_active(&env, admin, strategy_id, active)
+            .map_err(|_| LendingError::Unauthorized)
+    }
+
+    /// Harvest and auto-compound accrued LP fees for every pool in a strategy.
+    ///
+    /// This is the primary on-chain entry point for the yield farming
+    /// auto-compounding feature.  Returns the total amount compounded.
+    pub fn yield_harvest_and_compound(
+        env: Env,
+        admin: Address,
+        strategy_id: u64,
+    ) -> Result<i128, LendingError> {
+        amm::harvest_and_compound(&env, admin, strategy_id)
+            .map_err(|_| LendingError::InvalidAmount)
+    }
+
+    /// Score a strategy based on current pool utilization and IL snapshots.
+    ///
+    /// Returns a `StrategyScore` with estimated APY, IL risk, and a composite
+    /// ranking score so callers can compare strategies and pick the best one
+    /// for the current market regime.
+    pub fn yield_score_strategy(
+        env: Env,
+        admin: Address,
+        strategy_id: u64,
+    ) -> Result<amm::StrategyScore, LendingError> {
+        amm::score_yield_strategy(&env, &admin, strategy_id)
+            .map_err(|_| LendingError::InvalidAmount)
     }
 }
 

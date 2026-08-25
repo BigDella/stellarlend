@@ -577,3 +577,317 @@ pub fn get_pool_utilization(env: &Env, asset: &Address) -> i128 {
         .get::<AmmLendingKey, i128>(&key)
         .unwrap_or(0)
 }
+
+// ─── Yield Farming Strategy Optimizer (#789) ─────────────────────────────────
+
+/// Risk profile governing how aggressively capital is deployed.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum YieldStrategyRisk {
+    /// Prioritise capital preservation; lower APY target.
+    Conservative,
+    /// Balance between yield and impermanent-loss exposure.
+    Balanced,
+    /// Maximise yield; accepts higher IL and liquidation risk.
+    Aggressive,
+}
+
+/// Primary optimisation objective for the strategy.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum YieldStrategyObjective {
+    /// Allocate towards the highest-APY pool(s).
+    MaximizeApy,
+    /// Minimise impermanent-loss exposure across the portfolio.
+    MinimizeIl,
+    /// Weighted balance between APY maximisation and IL minimisation.
+    Balanced,
+}
+
+/// How frequently the strategy auto-compounds accrued fees.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum CompoundingInterval {
+    Hourly,
+    Daily,
+    Weekly,
+    /// Compound only when explicitly triggered by the admin.
+    Manual,
+}
+
+/// A named yield farming strategy stored on-chain per admin address.
+///
+/// Strategies are keyed by `YieldStrategyKey::Strategy(admin, strategy_id)`
+/// in persistent storage so they survive ledger TTL extension cycles.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct YieldStrategy {
+    /// Incrementing identifier scoped to the admin address.
+    pub strategy_id: u64,
+    /// Friendly name for the strategy.
+    pub name: String,
+    /// Optimisation objective.
+    pub objective: YieldStrategyObjective,
+    /// Risk tolerance.
+    pub risk: YieldStrategyRisk,
+    /// Compounding cadence.
+    pub compounding_interval: CompoundingInterval,
+    /// Pool addresses included in this strategy.
+    pub pools: Vec<Address>,
+    /// Whether the strategy is currently active.
+    pub active: bool,
+    /// Ledger timestamp of the last compound execution (0 = never run).
+    pub last_compounded_at: u64,
+    /// Cumulative LP fees compounded by this strategy (stroops).
+    pub total_compounded: i128,
+}
+
+/// Score assigned to a strategy after an optimisation pass.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct StrategyScore {
+    pub strategy_id: u64,
+    /// Blended APY estimate in basis points (e.g. 1200 = 12 %).
+    pub estimated_apy_bps: i128,
+    /// Aggregate IL risk score across all pools (lower is safer).
+    pub il_risk_score_bps: i128,
+    /// Composite score used for ranking (higher is better).
+    pub composite_score_bps: i128,
+}
+
+/// Storage keys for yield strategy objects.
+#[contracttype]
+#[derive(Clone)]
+pub enum YieldStrategyKey {
+    /// `(admin_address, strategy_id) -> YieldStrategy`
+    Strategy(Address, u64),
+    /// `admin_address -> u64` — monotonic counter for strategy IDs.
+    StrategyCounter(Address),
+}
+
+// ─── Strategy CRUD ────────────────────────────────────────────────────────────
+
+/// Create and persist a new yield farming strategy.
+///
+/// Returns the newly assigned `strategy_id`.
+pub fn create_yield_strategy(
+    env: &Env,
+    admin: Address,
+    name: String,
+    objective: YieldStrategyObjective,
+    risk: YieldStrategyRisk,
+    compounding_interval: CompoundingInterval,
+    pools: Vec<Address>,
+) -> Result<u64, AmmError> {
+    require_amm_admin(env, &admin)?;
+
+    if pools.is_empty() {
+        return Err(AmmError::InvalidSwapParams);
+    }
+
+    // Increment the per-admin strategy counter.
+    let counter_key = YieldStrategyKey::StrategyCounter(admin.clone());
+    let strategy_id: u64 = env
+        .storage()
+        .persistent()
+        .get::<YieldStrategyKey, u64>(&counter_key)
+        .unwrap_or(0)
+        .saturating_add(1);
+
+    env.storage()
+        .persistent()
+        .set(&counter_key, &strategy_id);
+
+    let strategy = YieldStrategy {
+        strategy_id,
+        name,
+        objective,
+        risk,
+        compounding_interval,
+        pools,
+        active: true,
+        last_compounded_at: 0,
+        total_compounded: 0,
+    };
+
+    env.storage()
+        .persistent()
+        .set(&YieldStrategyKey::Strategy(admin.clone(), strategy_id), &strategy);
+
+    Ok(strategy_id)
+}
+
+/// Retrieve a previously created strategy.
+pub fn get_yield_strategy(
+    env: &Env,
+    admin: &Address,
+    strategy_id: u64,
+) -> Option<YieldStrategy> {
+    env.storage()
+        .persistent()
+        .get(&YieldStrategyKey::Strategy(admin.clone(), strategy_id))
+}
+
+/// Activate or deactivate a strategy.
+pub fn set_yield_strategy_active(
+    env: &Env,
+    admin: Address,
+    strategy_id: u64,
+    active: bool,
+) -> Result<(), AmmError> {
+    require_amm_admin(env, &admin)?;
+
+    let key = YieldStrategyKey::Strategy(admin.clone(), strategy_id);
+    let mut strategy: YieldStrategy = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(AmmError::InvalidSwapParams)?;
+
+    strategy.active = active;
+    env.storage().persistent().set(&key, &strategy);
+    Ok(())
+}
+
+// ─── harvest_and_compound ─────────────────────────────────────────────────────
+
+/// Harvest accrued LP fees for every pool in a strategy and compound them
+/// back into the respective LP positions in one atomic call.
+///
+/// This is the on-chain half of the "yield farming strategy optimizer with
+/// auto-compounding" feature (#789).  It:
+///
+/// 1. Iterates each pool address registered in the strategy.
+/// 2. Calls the existing `compound_lp_fees` helper for each pool.
+/// 3. Accumulates the total compounded amount.
+/// 4. Updates `last_compounded_at` and `total_compounded` on the strategy.
+///
+/// Returns the total amount of LP fees compounded across all pools.
+pub fn harvest_and_compound(
+    env: &Env,
+    admin: Address,
+    strategy_id: u64,
+) -> Result<i128, AmmError> {
+    require_amm_admin(env, &admin)?;
+
+    let key = YieldStrategyKey::Strategy(admin.clone(), strategy_id);
+    let mut strategy: YieldStrategy = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(AmmError::InvalidSwapParams)?;
+
+    if !strategy.active {
+        return Err(AmmError::Unauthorized);
+    }
+
+    let mut total_compounded: i128 = 0;
+
+    // Collect pool addresses first to avoid borrowing env inside the loop body
+    // while also calling compound_lp_fees (which also borrows env mutably).
+    let pools: Vec<Address> = strategy.pools.clone();
+
+    for pool in pools.iter() {
+        // compound_lp_fees is a no-op (returns Ok(0)) when there's nothing
+        // accrued, so we can safely call it unconditionally.
+        let compounded = compound_lp_fees(env, admin.clone(), pool.clone())?;
+        total_compounded = total_compounded.saturating_add(compounded);
+    }
+
+    // Persist the updated counters back onto the strategy.
+    strategy.last_compounded_at = env.ledger().timestamp();
+    strategy.total_compounded = strategy.total_compounded.saturating_add(total_compounded);
+    env.storage().persistent().set(&key, &strategy);
+
+    Ok(total_compounded)
+}
+
+// ─── Strategy Scoring ─────────────────────────────────────────────────────────
+
+/// Score a strategy based on current pool utilization and IL snapshots.
+///
+/// The composite score weighs APY potential against IL risk according to
+/// the strategy's own `objective`:
+///
+/// - `MaximizeApy`  → weight 80 % APY, 20 % IL safety
+/// - `MinimizeIl`   → weight 20 % APY, 80 % IL safety
+/// - `Balanced`     → weight 50 % APY, 50 % IL safety
+///
+/// Returns a `StrategyScore` that callers can compare across strategies to
+/// rank them and surface the best candidate for the current market regime.
+pub fn score_yield_strategy(
+    env: &Env,
+    admin: &Address,
+    strategy_id: u64,
+) -> Result<StrategyScore, AmmError> {
+    let strategy: YieldStrategy = env
+        .storage()
+        .persistent()
+        .get(&YieldStrategyKey::Strategy(admin.clone(), strategy_id))
+        .ok_or(AmmError::InvalidSwapParams)?;
+
+    let pool_count = strategy.pools.len() as i128;
+    if pool_count == 0 {
+        return Err(AmmError::InvalidSwapParams);
+    }
+
+    let mut total_utilization: i128 = 0;
+    let mut total_il_risk: i128 = 0;
+
+    for pool in strategy.pools.iter() {
+        // Utilization serves as a proxy for lending APY:
+        // higher utilization → higher borrow rate → higher supply yield.
+        let utilization = get_pool_utilization(env, &pool);
+        total_utilization = total_utilization.saturating_add(utilization);
+
+        // IL risk is derived from the price-ratio BPS stored in IlSnapshot.
+        // A ratio far below BPS_SCALE indicates a significant price move, i.e.
+        // higher IL risk.  We express "IL risk" as the deviation from 1.0.
+        let il_risk = match get_il_snapshot(env, &pool) {
+            Some(snap) => {
+                let deviation = if snap.price_ratio_bps < BPS_SCALE {
+                    BPS_SCALE - snap.price_ratio_bps
+                } else {
+                    snap.price_ratio_bps - BPS_SCALE
+                };
+                deviation
+            }
+            None => 0,
+        };
+        total_il_risk = total_il_risk.saturating_add(il_risk);
+    }
+
+    // Average across pools.
+    let avg_utilization = total_utilization.checked_div(pool_count).unwrap_or(0);
+    let avg_il_risk = total_il_risk.checked_div(pool_count).unwrap_or(0);
+
+    // Map average utilization to an estimated APY in bps.
+    // Simple linear model: 0 % util → 0 bps APY, 100 % util → 2 000 bps (20 %).
+    let estimated_apy_bps = avg_utilization
+        .saturating_mul(2_000)
+        .checked_div(BPS_SCALE)
+        .unwrap_or(0);
+
+    // IL safety score (higher = safer): BPS_SCALE minus the average IL risk.
+    let il_safety_bps = BPS_SCALE.saturating_sub(avg_il_risk).max(0);
+
+    // Objective-weighted composite score.
+    let (apy_weight, il_weight) = match strategy.objective {
+        YieldStrategyObjective::MaximizeApy => (8_000i128, 2_000i128),
+        YieldStrategyObjective::MinimizeIl  => (2_000i128, 8_000i128),
+        YieldStrategyObjective::Balanced    => (5_000i128, 5_000i128),
+    };
+
+    let composite_score_bps = (estimated_apy_bps
+        .saturating_mul(apy_weight)
+        .saturating_add(il_safety_bps.saturating_mul(il_weight)))
+    .checked_div(BPS_SCALE)
+    .unwrap_or(0);
+
+    Ok(StrategyScore {
+        strategy_id,
+        estimated_apy_bps,
+        il_risk_score_bps: avg_il_risk,
+        composite_score_bps,
+    })
+}
