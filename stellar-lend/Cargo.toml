@@ -50,6 +50,7 @@ members = [
   "contracts/auto-compound-vault",
   "contracts/risk-scoring",
   "contracts/pool-interfaces",
+  "contracts/pool-migration",
   "contracts/yield-router",
   "contracts/shared-events",
   "contracts/dutch-auction",
