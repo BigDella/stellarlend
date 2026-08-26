@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface CollateralEntry {
   asset: string;
@@ -26,6 +26,30 @@ interface SimulationResult {
   recommendation: string;
 }
 
+interface CollateralRatioSnapshot {
+  asset: string;
+  currentRatio: number;
+  requiredRatio: number;
+  healthFactor: number;
+  riskLevel: 'safe' | 'warning' | 'danger' | 'critical';
+  collateralValue: string;
+  debtValue: string;
+  timestamp: number;
+}
+
+interface RiskAlert {
+  id: string;
+  type: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  address: string;
+  asset: string;
+  message: string;
+  currentValue: number;
+  thresholdValue: number;
+  timestamp: number;
+  acknowledged: boolean;
+}
+
 const COLORS = {
   safe: '#28a745',
   warning: '#ffc107',
@@ -50,6 +74,96 @@ export const RiskAnalyzer: React.FC = () => {
   const [results, setResults] = useState<SimulationResult[]>([]);
   const [scenarios, setScenarios] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  
+  // Real-time collateral ratio monitoring state
+  const [collateralSnapshots, setCollateralSnapshots] = useState<CollateralRatioSnapshot[]>([]);
+  const [riskAlerts, setRiskAlerts] = useState<RiskAlert[]>([]);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [showCollateralMonitoring, setShowCollateralMonitoring] = useState(true);
+
+  useEffect(() => {
+    fetchCollateralSnapshots();
+    connectWebSocket();
+    return () => disconnectWebSocket();
+  }, []);
+
+  const fetchCollateralSnapshots = async () => {
+    try {
+      const res = await fetch('/api/risk/collateral-ratio/snapshots');
+      const data = await res.json();
+      setCollateralSnapshots(data);
+    } catch (e) {
+      console.error('Failed to fetch collateral snapshots', e);
+    }
+  };
+
+  const fetchRiskAlerts = async () => {
+    try {
+      const res = await fetch('/api/risk/collateral-ratio/alerts?limit=10');
+      const data = await res.json();
+      setRiskAlerts(data);
+    } catch (e) {
+      console.error('Failed to fetch risk alerts', e);
+    }
+  };
+
+  const connectWebSocket = () => {
+    const ws = new WebSocket(`ws://${window.location.host}/api/ws/collateral-ratios?alerts=true`);
+    
+    ws.onopen = () => {
+      setWsConnected(true);
+      console.log('Collateral ratio WebSocket connected');
+    };
+
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      
+      switch (message.type) {
+        case 'initial_snapshot':
+          setCollateralSnapshots(message.snapshots);
+          break;
+        case 'ratio_update':
+          setCollateralSnapshots((prev) => {
+            const index = prev.findIndex((s) => s.asset === message.snapshot.asset);
+            if (index >= 0) {
+              const updated = [...prev];
+              updated[index] = message.snapshot;
+              return updated;
+            }
+            return [...prev, message.snapshot];
+          });
+          break;
+        case 'alert':
+          setRiskAlerts((prev) => [message.alert, ...prev].slice(0, 50));
+          break;
+      }
+    };
+
+    ws.onclose = () => {
+      setWsConnected(false);
+      console.log('Collateral ratio WebSocket disconnected');
+      setTimeout(connectWebSocket, 5000);
+    };
+
+    ws.onerror = (error) => {
+      console.error('WebSocket error', error);
+    };
+
+    return () => ws.close();
+  };
+
+  const disconnectWebSocket = () => {
+    // Cleanup handled in useEffect return
+  };
+
+  const acknowledgeAlert = async (alertId: string) => {
+    try {
+      await fetch(`/api/risk/collateral-ratio/alerts/${alertId}/acknowledge`, { method: 'POST' });
+      setRiskAlerts((prev) => prev.map((a) => (a.id === alertId ? { ...a, acknowledged: true } : a)));
+    } catch (e) {
+      console.error('Failed to acknowledge alert', e);
+    }
+  };
 
   const fetchScenarios = async () => {
     try {
@@ -104,7 +218,110 @@ export const RiskAnalyzer: React.FC = () => {
 
   return (
     <div style={styles.container}>
-      <h2>Liquidation Risk Analyzer</h2>
+      <div style={styles.header}>
+        <h2>Liquidation Risk Analyzer</h2>
+        <div style={styles.wsStatus}>
+          <span style={{ ...styles.statusDot, backgroundColor: wsConnected ? COLORS.safe : COLORS.critical }} />
+          {wsConnected ? 'Live' : 'Disconnected'}
+        </div>
+      </div>
+
+      {/* Real-time Collateral Ratio Monitoring Widget */}
+      {showCollateralMonitoring && (
+        <div style={styles.collateralMonitoring}>
+          <div style={styles.sectionHeader}>
+            <h3>Real-time Collateral Ratios</h3>
+            <button onClick={() => setShowCollateralMonitoring(false)} style={styles.closeBtn}>×</button>
+          </div>
+          
+          <div style={styles.snapshotsGrid}>
+            {collateralSnapshots.map((snapshot) => (
+              <div
+                key={snapshot.asset}
+                style={{
+                  ...styles.snapshotCard,
+                  borderLeft: `4px solid ${COLORS[snapshot.riskLevel]}`,
+                }}
+              >
+                <div style={styles.cardHeader}>
+                  <strong>{snapshot.asset}</strong>
+                  <span style={{ ...styles.badge, backgroundColor: COLORS[snapshot.riskLevel] }}>
+                    {snapshot.riskLevel.toUpperCase()}
+                  </span>
+                </div>
+                <div style={styles.metricRow}>
+                  <span style={styles.metricLabel}>Health Factor:</span>
+                  <span style={{ ...styles.metricValue, color: COLORS[snapshot.riskLevel] }}>
+                    {snapshot.healthFactor.toFixed(2)}
+                  </span>
+                </div>
+                <div style={styles.metricRow}>
+                  <span style={styles.metricLabel}>Current Ratio:</span>
+                  <span style={styles.metricValue}>{(snapshot.currentRatio / 100).toFixed(2)}%</span>
+                </div>
+                <div style={styles.metricRow}>
+                  <span style={styles.metricLabel}>Required Ratio:</span>
+                  <span style={styles.metricValue}>{(snapshot.requiredRatio / 100).toFixed(2)}%</span>
+                </div>
+                <div style={styles.metricRow}>
+                  <span style={styles.metricLabel}>Collateral:</span>
+                  <span style={styles.metricValue}>${parseFloat(snapshot.collateralValue).toLocaleString()}</span>
+                </div>
+                <div style={styles.metricRow}>
+                  <span style={styles.metricLabel}>Debt:</span>
+                  <span style={styles.metricValue}>${parseFloat(snapshot.debtValue).toLocaleString()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Risk Alerts */}
+          {riskAlerts.length > 0 && (
+            <div style={styles.alertsSection}>
+              <h4>Risk Alerts</h4>
+              {riskAlerts.slice(0, 5).map((alert) => (
+                <div
+                  key={alert.id}
+                  style={{
+                    ...styles.alertCard,
+                    borderLeft: `4px solid ${COLORS[alert.severity]}`,
+                    opacity: alert.acknowledged ? 0.6 : 1,
+                  }}
+                >
+                  <div style={styles.alertHeader}>
+                    <span style={{ ...styles.badge, backgroundColor: COLORS[alert.severity] }}>
+                      {alert.severity.toUpperCase()}
+                    </span>
+                    <span style={styles.alertTime}>
+                      {new Date(alert.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <p style={styles.alertMessage}>{alert.message}</p>
+                  <div style={styles.alertFooter}>
+                    <span style={styles.alertAsset}>{alert.asset}</span>
+                    {!alert.acknowledged && (
+                      <button
+                        onClick={() => acknowledgeAlert(alert.id)}
+                        style={styles.ackBtn}
+                      >
+                        Acknowledge
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!showCollateralMonitoring && (
+        <button onClick={() => setShowCollateralMonitoring(true)} style={styles.showBtn}>
+          Show Collateral Monitoring
+        </button>
+      )}
+
+      <div style={styles.divider} />
 
       <div style={styles.panel}>
         <div style={styles.section}>
@@ -260,6 +477,29 @@ const Metric: React.FC<{ label: string; value: string; color?: string }> = ({ la
 
 const styles: Record<string, React.CSSProperties> = {
   container: { maxWidth: 960, margin: '0 auto', padding: 24 },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  wsStatus: { display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#666' },
+  statusDot: { width: 10, height: 10, borderRadius: '50%' },
+  collateralMonitoring: { marginBottom: 24, padding: 20, background: '#f8f9fa', borderRadius: 8, border: '1px solid #e0e0e0' },
+  sectionHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  closeBtn: { background: 'none', border: 'none', fontSize: 24, cursor: 'pointer', color: '#666', padding: 0, lineHeight: 1 },
+  snapshotsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, marginBottom: 20 },
+  snapshotCard: { padding: 16, background: 'white', borderRadius: 8, border: '1px solid #e0e0e0', boxShadow: '0 2px 4px rgba(0,0,0,0.05)' },
+  cardHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  badge: { padding: '4px 12px', borderRadius: 4, color: 'white', fontSize: 12, fontWeight: 'bold' },
+  metricRow: { display: 'flex', justifyContent: 'space-between', marginBottom: 8 },
+  metricLabel: { fontSize: 13, color: '#666' },
+  metricValue: { fontSize: 14, fontWeight: 'bold', color: '#333' },
+  alertsSection: { marginTop: 16 },
+  alertCard: { padding: 12, marginBottom: 8, background: 'white', borderRadius: 6, border: '1px solid #e0e0e0' },
+  alertHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  alertTime: { fontSize: 12, color: '#999' },
+  alertMessage: { margin: '8px 0', fontSize: 14, color: '#333' },
+  alertFooter: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  alertAsset: { fontSize: 13, color: '#666', fontWeight: 'bold' },
+  ackBtn: { padding: '6px 12px', background: '#6c757d', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 12 },
+  showBtn: { padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', marginBottom: 20 },
+  divider: { height: 1, background: '#e0e0e0', margin: '24px 0' },
   panel: { display: 'flex', gap: 24, marginBottom: 20 },
   section: { flex: 1, padding: 16, background: '#f5f5f5', borderRadius: 8 },
   row: { display: 'flex', gap: 8, marginBottom: 8 },
@@ -274,11 +514,8 @@ const styles: Record<string, React.CSSProperties> = {
   resultsSection: { marginTop: 20 },
   resultCard: { padding: 16, marginBottom: 12, background: '#f9f9f9', borderRadius: 8, border: '1px solid #e0e0e0' },
   resultHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  badge: { padding: '4px 12px', borderRadius: 4, color: 'white', fontSize: 12, fontWeight: 'bold' },
   metrics: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 },
   metric: { textAlign: 'center' },
-  metricLabel: { fontSize: 12, color: '#666', display: 'block' },
-  metricValue: { fontSize: 16, fontWeight: 'bold', display: 'block' },
   recommendation: { padding: 10, background: '#fff3cd', borderRadius: 4, fontSize: 14, margin: '10px 0' },
   liqPrices: { fontSize: 13, color: '#dc3545', padding: 8, background: '#f8d7da', borderRadius: 4 },
 };

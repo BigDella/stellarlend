@@ -91,3 +91,9 @@ export class MerkleProofService {
 }
 
 export const merkleProofService = new MerkleProofService();
+
+export function resetMerkleProofStore(): void {
+  accountRegistry.clear();
+  currentTree = null;
+  treeSnapshot = null;
+}

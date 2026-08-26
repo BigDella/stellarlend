@@ -41,7 +41,7 @@ pub struct InterestRateConfigUpdate {
 
 fn default_config(env: &Env) -> InterestRateConfig {
     InterestRateConfig {
-        base_rate_bps: 100,
+        base_rate_bps: 500,
         kink_utilization_bps: 8000,
         slope_bps: 2000,
         jump_slope_bps: 10_000,

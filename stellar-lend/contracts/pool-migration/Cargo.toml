@@ -1,0 +1,19 @@
+[package]
+name = "stellarlend-pool-migration"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "stellarlend_pool_migration"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+soroban-sdk = { workspace = true }
+stellarlend-shared-deadline = { path = "../shared-deadline" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

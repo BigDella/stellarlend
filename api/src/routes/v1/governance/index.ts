@@ -11,6 +11,8 @@ import { Router } from 'express';
 import stakingRoutes from '../../staking.routes';
 import rebalancingRoutes from '../../rebalancing.routes';
 import riskRoutes from '../../risk.routes';
+import governanceSimulationRoutes from '../../governanceSimulation.routes';
+import poolPerformanceRoutes from '../../poolPerformance.routes';
 
 const router = Router();
 
@@ -22,5 +24,7 @@ router.use('/rebalancing', rebalancingRoutes);
 
 // Risk monitoring: /v1/governance/risk/*
 router.use('/risk', riskRoutes);
+router.use('/simulate', governanceSimulationRoutes);
+router.use('/pool-performance', poolPerformanceRoutes);
 
 export default router;

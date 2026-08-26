@@ -97,7 +97,7 @@ fn lemma_c01_exact_150pct_is_accepted() {
 #[test]
 fn lemma_c02_below_150pct_is_rejected() {
     let test_cases: &[(i128, i128)] = &[
-        (1, 2),    // 50% — clearly insufficient
+        (1, 2), // 50% — clearly insufficient
         (100, 200),
         (14_999, 10_000), // 149.99% — just below the threshold
     ];
@@ -122,8 +122,8 @@ fn lemma_c02_below_150pct_is_rejected() {
 #[test]
 fn lemma_c03_above_150pct_is_accepted() {
     let test_cases: &[(i128, i128)] = &[
-        (15_001, 10_000),   // 150.01%
-        (20_000, 10_000),   // 200%
+        (15_001, 10_000),       // 150.01%
+        (20_000, 10_000),       // 200%
         (3_000_000, 1_000_000), // 300%
         (i128::MAX / 2, 1),
     ];

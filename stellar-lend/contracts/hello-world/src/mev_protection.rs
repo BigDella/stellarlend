@@ -1,61 +1,28 @@
-//! # MEV Protection Module
-//!
-//! Protects liquidations and large transactions from MEV (Maximal Extractable Value)
-//! extraction via:
-//!
-//! - **Commit-reveal scheme** — users commit a hash of their intent; after a mandatory
-//!   delay they reveal and execute. Front-runners cannot act on hidden parameters.
-//! - **Batch auction for liquidations** — liquidation opportunities are collected into
-//!   a time-windowed batch and settled at a uniform clearing price, eliminating
-//!   priority-gas-auction races.
-//! - **Slippage protection with deadline** — every sensitive operation carries a
-//!   `max_slippage_bps` and `deadline` that are enforced at reveal time.
-//! - **Private mempool integration** — the contract signals preferred routing hints
-//!   (`PrivateMempool`, `BatchAuction`, `DelayedReveal`) so off-chain relayers can
-//!   route transactions through protected channels.
-//! - **Gas price bidding analysis** — the module tracks effective fee observations and
-//!   exposes smoothed fee statistics so callers can make informed bid decisions.
-//! - **Sandwich / ordering detection** — consecutive observations from different actors
-//!   within a suspicious window increment alert counters surfaced in `OrderingStats`.
-
 use soroban_sdk::{contracterror, contracttype, Address, Env, String, Symbol};
-use stellarlend_shared_deadline::{is_expired_strict, require_strict_deadline};
-
-// ─── Error Types ─────────────────────────────────────────────────────────────
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum MevProtectionError {
-    /// Configuration value is out of range or logically invalid
     InvalidConfig = 1,
-    /// Commit ID does not exist in storage
     CommitNotFound = 2,
-    /// Reveal attempted before the mandatory delay has elapsed
     CommitNotReady = 3,
-    /// Commit has passed its expiry window
     CommitExpired = 4,
-    /// Caller is not the commit owner or protocol admin
     Unauthorized = 5,
-    /// Effective MEV fee exceeds the caller's declared cap
     FeeCapExceeded = 6,
-    /// Amount is zero or negative
     InvalidAmount = 7,
-    /// Operation type mismatch between commit and reveal
     InvalidOperation = 8,
-    /// Transaction deadline has passed
-    DeadlineExpired = 9,
-    /// Slippage tolerance exceeded at execution time
+    SlippageExpired = 9,
     SlippageExceeded = 10,
-    /// Batch auction window is not yet closed
-    AuctionWindowOpen = 11,
-    /// No bids registered for this batch auction slot
-    NoBidsInAuction = 12,
+    AuctionNotFound = 11,
+    AuctionNotOpen = 12,
+    AuctionNotReady = 13,
+    BidNotFound = 14,
+    BidTooLow = 15,
+    PrivateRouteRequired = 16,
+    PrivateRouteNotFound = 17,
 }
 
-// ─── Enumerations ────────────────────────────────────────────────────────────
-
-/// The sensitive operation being protected.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SensitiveOperation {
@@ -64,129 +31,63 @@ pub enum SensitiveOperation {
     Liquidate,
 }
 
-/// Preferred transaction routing hint returned to off-chain relayers.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TxOrderingHint {
-    /// Use the default public mempool (no special routing).
     Default,
-    /// Route through a private / protected mempool (Flashbots-style).
     PrivateMempool,
-    /// Participate in the on-chain batch auction for this operation.
     BatchAuction,
-    /// Delay submission until after the commit-reveal window closes.
     DelayedReveal,
 }
 
-// ─── Configuration ───────────────────────────────────────────────────────────
-
-/// Protocol-wide MEV protection configuration.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MevProtectionConfig {
-    /// Mandatory delay (seconds) between commit and reveal.
     pub commit_delay_secs: u64,
-    /// Maximum lifetime (seconds) of an unrevealed commit.
     pub commit_expiry_secs: u64,
-    /// Window (seconds) used to detect suspicious ordering sequences.
     pub suspicious_window_secs: u64,
-    /// EMA smoothing weight for fee observations (0–10 000 bps).
     pub fee_smoothing_bps: i128,
-    /// Base MEV protection fee charged on normal operations (bps).
     pub base_protection_fee_bps: i128,
-    /// Surge fee charged when suspicious activity is detected (bps).
     pub surge_protection_fee_bps: i128,
-    /// Relative amount difference threshold for sandwich detection (bps).
     pub sandwich_threshold_bps: i128,
-    /// Whether private-mempool routing is enabled.
+    pub large_tx_threshold: i128,
+    pub default_auction_secs: u64,
+    pub min_auction_bid_rebate_bps: i128,
+    pub max_private_route_ttl_secs: u64,
     pub private_mempool_enabled: bool,
-    /// Whether batch-auction settlement is enabled.
     pub batching_enabled: bool,
-    /// Duration (seconds) of each batch auction window.
-    pub batch_window_secs: u64,
-    /// Maximum slippage allowed by default when none is specified (bps).
-    pub default_max_slippage_bps: i128,
 }
 
-// ─── Commit / Reveal Types ────────────────────────────────────────────────────
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExecutionGuard {
+    pub quoted_output_amount: i128,
+    pub min_output_amount: i128,
+    pub max_slippage_bps: i128,
+    pub deadline: u64,
+}
 
-/// A pending commit stored on-chain until the reveal phase.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingCommit {
-    /// Unique monotonic identifier.
     pub id: u64,
-    /// Address that created the commit (must match at reveal).
     pub owner: Address,
-    /// Operation type (must match at reveal).
     pub operation: SensitiveOperation,
-    /// Primary asset (debt asset for liquidations, collateral for others).
     pub asset: Option<Address>,
-    /// Secondary asset (collateral asset for liquidations).
     pub secondary_asset: Option<Address>,
-    /// Borrower address (liquidations only).
     pub borrower: Option<Address>,
-    /// Amount to operate on.
     pub amount: i128,
-    /// Maximum MEV fee the caller is willing to pay (bps).
     pub max_fee_bps: i128,
-    /// Preferred routing hint.
     pub hint: TxOrderingHint,
-    /// Ledger timestamp when the commit was created.
     pub committed_at: u64,
-    /// Earliest timestamp at which reveal is permitted.
     pub reveal_after: u64,
-    /// Timestamp after which the commit is considered expired.
     pub expires_at: u64,
-    /// Ledger sequence number at commit time (for ordering analysis).
     pub commit_ledger: u32,
-    /// Maximum slippage the caller accepts (bps). 0 = use protocol default.
-    pub max_slippage_bps: i128,
-    /// Unix timestamp after which the operation must not execute.
-    pub deadline: u64,
+    pub guard: Option<ExecutionGuard>,
+    pub private_route: Option<Symbol>,
+    pub auction_id: Option<u64>,
 }
 
-// ─── Batch Auction Types ──────────────────────────────────────────────────────
-
-/// A single bid in a batch liquidation auction.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuctionBid {
-    /// Bidder (liquidator) address.
-    pub bidder: Address,
-    /// Borrower whose position is being bid on.
-    pub borrower: Address,
-    /// Debt amount the bidder is willing to repay.
-    pub debt_amount: i128,
-    /// Minimum collateral the bidder expects to receive (slippage guard).
-    pub min_collateral_out: i128,
-    /// Maximum fee the bidder will pay (bps).
-    pub max_fee_bps: i128,
-    /// Timestamp when the bid was placed.
-    pub placed_at: u64,
-    /// Deadline: bid is invalid after this timestamp.
-    pub deadline: u64,
-}
-
-/// Aggregated result of a settled batch auction slot.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuctionResult {
-    /// Slot identifier (= `slot_start_time / batch_window_secs`).
-    pub slot_id: u64,
-    /// Number of bids that participated.
-    pub bid_count: u32,
-    /// Uniform clearing fee applied to all winning bids (bps).
-    pub clearing_fee_bps: i128,
-    /// Total debt liquidated across all winning bids.
-    pub total_debt_liquidated: i128,
-    /// Timestamp when the auction was settled.
-    pub settled_at: u64,
-}
-
-// ─── Monitoring / Analytics Types ────────────────────────────────────────────
-
-/// A single ordering observation recorded after each reveal.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderingObservation {
@@ -195,49 +96,116 @@ pub struct OrderingObservation {
     pub timestamp: u64,
 }
 
-/// Cumulative MEV ordering statistics exposed to the monitoring dashboard.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrderingStats {
-    /// Number of suspicious ordering sequences detected.
     pub suspicious_sequences: u64,
-    /// Number of sandwich-attack patterns detected.
     pub sandwich_alerts: u64,
-    /// Timestamp of the most recent alert.
     pub last_alert_timestamp: u64,
-    /// Last smoothed effective fee (bps).
     pub last_effective_fee_bps: i128,
-    /// Total commits created since deployment.
-    pub total_commits: u64,
-    /// Total reveals executed since deployment.
-    pub total_reveals: u64,
-    /// Total batch auction bids placed.
-    pub total_auction_bids: u64,
-    /// Total batch auctions settled.
-    pub total_auctions_settled: u64,
-    /// Cumulative MEV fees collected (in bps-weighted units).
-    pub cumulative_fee_bps_collected: i128,
 }
 
-/// Gas price bidding analysis snapshot.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct GasBidAnalysis {
-    /// Current smoothed base fee (bps).
-    pub smoothed_base_fee_bps: i128,
-    /// Current surge fee (bps) — non-zero when suspicious activity detected.
-    pub current_surge_fee_bps: i128,
-    /// Recommended bid fee for a normal operation (bps).
-    pub recommended_bid_bps: i128,
-    /// Recommended bid fee during high-congestion periods (bps).
-    pub high_congestion_bid_bps: i128,
-    /// Whether the protocol is currently in a suspicious-activity window.
-    pub in_suspicious_window: bool,
-    /// Number of sandwich alerts in the last suspicious window.
-    pub recent_sandwich_alerts: u64,
+pub enum AuctionStatus {
+    Open,
+    Settled,
+    Cancelled,
 }
 
-// ─── Storage Keys ─────────────────────────────────────────────────────────────
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiquidationAuction {
+    pub id: u64,
+    pub opener: Address,
+    pub borrower: Address,
+    pub debt_asset: Option<Address>,
+    pub collateral_asset: Option<Address>,
+    pub debt_amount: i128,
+    pub min_rebate_bps: i128,
+    pub opened_at: u64,
+    pub bidding_deadline: u64,
+    pub status: AuctionStatus,
+    pub best_bid_id: Option<u64>,
+    pub winning_liquidator: Option<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiquidationAuctionBid {
+    pub id: u64,
+    pub auction_id: u64,
+    pub liquidator: Address,
+    pub repay_amount: i128,
+    pub rebate_bps: i128,
+    pub max_fee_bps: i128,
+    pub min_collateral_out: i128,
+    pub private_route: Option<Symbol>,
+    pub submitted_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuctionStats {
+    pub opened: u64,
+    pub bids: u64,
+    pub settled: u64,
+    pub executed: u64,
+    pub last_auction_id: u64,
+    pub last_settled_timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrivateMempoolRoute {
+    pub route_id: Symbol,
+    pub relay: Address,
+    pub registered_by: Address,
+    pub registered_at: u64,
+    pub expires_at: u64,
+    pub active: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrivateExecutionReceipt {
+    pub commit_id: u64,
+    pub route_id: Symbol,
+    pub relay: Address,
+    pub received_at: u64,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PrivateRouteStats {
+    pub active_routes: u32,
+    pub executions: u64,
+    pub last_execution_timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GasBidStats {
+    pub samples: u64,
+    pub min_bid_microlumens: i128,
+    pub max_bid_microlumens: i128,
+    pub avg_bid_microlumens: i128,
+    pub last_bid_microlumens: i128,
+    pub avg_inclusion_delay_ledgers: u64,
+    pub last_updated: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MevMonitoringDashboard {
+    pub ordering: OrderingStats,
+    pub gas_bids: GasBidStats,
+    pub auctions: AuctionStats,
+    pub private_routes: PrivateRouteStats,
+    pub recommended_fee_bps: i128,
+    pub recommended_hint: TxOrderingHint,
+}
 
 #[contracttype]
 #[derive(Clone)]
@@ -245,23 +213,22 @@ enum MevDataKey {
     Config,
     NextCommitId,
     Commit(u64),
+    NextAuctionId,
+    NextBidId,
+    Auction(u64),
+    AuctionBid(u64),
+    AuctionStats,
+    PrivateRoute(Symbol),
+    PrivateReceipt(u64),
+    PrivateStats,
+    GasBidStats(Symbol, Option<Address>),
     OrderingStats,
     LatestObservation(Symbol, Option<Address>),
     PreviousObservation(Symbol, Option<Address>),
     SmoothedFee(Symbol, Option<Address>),
-    /// Bids for a given auction slot: slot_id → Vec<AuctionBid>
-    AuctionBids(u64),
-    /// Settled result for a given auction slot
-    AuctionResult(u64),
-    /// Next auction slot id counter
-    NextAuctionSlotId,
 }
 
 const MAX_BPS: i128 = 10_000;
-/// Maximum number of bids stored per auction slot (prevents unbounded growth).
-const MAX_BIDS_PER_SLOT: u32 = 200;
-
-// ─── Default Configuration ────────────────────────────────────────────────────
 
 pub fn default_config() -> MevProtectionConfig {
     MevProtectionConfig {
@@ -272,16 +239,15 @@ pub fn default_config() -> MevProtectionConfig {
         base_protection_fee_bps: 10,
         surge_protection_fee_bps: 60,
         sandwich_threshold_bps: 500,
+        large_tx_threshold: 100_000,
+        default_auction_secs: 60,
+        min_auction_bid_rebate_bps: 25,
+        max_private_route_ttl_secs: 600,
         private_mempool_enabled: true,
         batching_enabled: true,
-        batch_window_secs: 60,
-        default_max_slippage_bps: 100, // 1% default slippage tolerance
     }
 }
 
-// ─── Admin: Configure ─────────────────────────────────────────────────────────
-
-/// Update MEV protection configuration (admin only).
 pub fn configure(
     env: &Env,
     caller: Address,
@@ -294,7 +260,6 @@ pub fn configure(
     Ok(())
 }
 
-/// Read current MEV protection configuration (or defaults if not yet set).
 pub fn get_config(env: &Env) -> MevProtectionConfig {
     env.storage()
         .persistent()
@@ -302,17 +267,6 @@ pub fn get_config(env: &Env) -> MevProtectionConfig {
         .unwrap_or_else(default_config)
 }
 
-// ─── Commit / Reveal ──────────────────────────────────────────────────────────
-
-/// Create a new commit for a sensitive operation.
-///
-/// The caller must authorize the call. The commit is stored on-chain and can
-/// only be revealed after `commit_delay_secs` and before `commit_expiry_secs`.
-///
-/// # Parameters
-/// - `max_slippage_bps`: 0 means "use protocol default".
-/// - `deadline`: 0 means "no deadline" (uses `commit_expiry_secs` as fallback).
-#[allow(clippy::too_many_arguments)]
 pub fn create_commit(
     env: &Env,
     owner: Address,
@@ -324,15 +278,23 @@ pub fn create_commit(
     max_fee_bps: i128,
     hint: TxOrderingHint,
 ) -> Result<u64, MevProtectionError> {
-    create_commit_with_slippage(
-        env, owner, operation, asset, secondary_asset, borrower,
-        amount, max_fee_bps, hint, 0, 0,
+    create_commit_with_context(
+        env,
+        owner,
+        operation,
+        asset,
+        secondary_asset,
+        borrower,
+        amount,
+        max_fee_bps,
+        hint,
+        None,
+        None,
+        None,
     )
 }
 
-/// Extended commit creation with explicit slippage and deadline parameters.
-#[allow(clippy::too_many_arguments)]
-pub fn create_commit_with_slippage(
+pub fn create_guarded_commit(
     env: &Env,
     owner: Address,
     operation: SensitiveOperation,
@@ -342,8 +304,39 @@ pub fn create_commit_with_slippage(
     amount: i128,
     max_fee_bps: i128,
     hint: TxOrderingHint,
-    max_slippage_bps: i128,
-    deadline: u64,
+    guard: ExecutionGuard,
+    private_route: Option<Symbol>,
+    auction_id: Option<u64>,
+) -> Result<u64, MevProtectionError> {
+    create_commit_with_context(
+        env,
+        owner,
+        operation,
+        asset,
+        secondary_asset,
+        borrower,
+        amount,
+        max_fee_bps,
+        hint,
+        Some(guard),
+        private_route,
+        auction_id,
+    )
+}
+
+fn create_commit_with_context(
+    env: &Env,
+    owner: Address,
+    operation: SensitiveOperation,
+    asset: Option<Address>,
+    secondary_asset: Option<Address>,
+    borrower: Option<Address>,
+    amount: i128,
+    max_fee_bps: i128,
+    hint: TxOrderingHint,
+    guard: Option<ExecutionGuard>,
+    private_route: Option<Symbol>,
+    auction_id: Option<u64>,
 ) -> Result<u64, MevProtectionError> {
     owner.require_auth();
     if amount <= 0 {
@@ -352,30 +345,20 @@ pub fn create_commit_with_slippage(
     if !(0..=MAX_BPS).contains(&max_fee_bps) {
         return Err(MevProtectionError::InvalidConfig);
     }
-    if max_slippage_bps < 0 || max_slippage_bps > MAX_BPS {
-        return Err(MevProtectionError::InvalidConfig);
-    }
 
     let cfg = get_config(env);
-    let now = env.ledger().timestamp();
-
-    // Validate deadline if provided
-    let effective_deadline = if deadline == 0 {
-        now.saturating_add(cfg.commit_expiry_secs)
-    } else {
-        if deadline <= now {
-            return Err(MevProtectionError::DeadlineExpired);
-        }
-        deadline
-    };
-
-    let effective_slippage = if max_slippage_bps == 0 {
-        cfg.default_max_slippage_bps
-    } else {
-        max_slippage_bps
-    };
+    if let Some(ref execution_guard) = guard {
+        validate_guard_config(env, execution_guard)?;
+    }
+    if let Some(ref route_id) = private_route {
+        ensure_private_route(env, route_id)?;
+    }
+    if let Some(id) = auction_id {
+        ensure_auction_for_commit(env, id, &owner)?;
+    }
 
     let id = next_commit_id(env);
+    let now = env.ledger().timestamp();
     let commit = PendingCommit {
         id,
         owner,
@@ -390,31 +373,22 @@ pub fn create_commit_with_slippage(
         reveal_after: now.saturating_add(cfg.commit_delay_secs),
         expires_at: now.saturating_add(cfg.commit_expiry_secs),
         commit_ledger: env.ledger().sequence(),
-        max_slippage_bps: effective_slippage,
-        deadline: effective_deadline,
+        guard,
+        private_route,
+        auction_id,
     };
     env.storage()
         .persistent()
         .set(&MevDataKey::Commit(id), &commit);
-
-    // Update stats
-    let mut stats = get_ordering_stats(env);
-    stats.total_commits = stats.total_commits.saturating_add(1);
-    env.storage()
-        .persistent()
-        .set(&MevDataKey::OrderingStats, &stats);
-
     Ok(id)
 }
 
-/// Retrieve a pending commit by ID (returns `None` if not found or already consumed).
 pub fn get_commit(env: &Env, commit_id: u64) -> Option<PendingCommit> {
     env.storage()
         .persistent()
         .get(&MevDataKey::Commit(commit_id))
 }
 
-/// Cancel a pending commit (owner only). Refunds any locked state.
 pub fn cancel_commit(env: &Env, owner: Address, commit_id: u64) -> Result<(), MevProtectionError> {
     owner.require_auth();
     let commit = load_commit(env, commit_id)?;
@@ -427,339 +401,6 @@ pub fn cancel_commit(env: &Env, owner: Address, commit_id: u64) -> Result<(), Me
     Ok(())
 }
 
-// ─── Reveal Helpers ───────────────────────────────────────────────────────────
-
-/// Reveal a borrow commit. Returns `(asset, amount, effective_fee_bps)`.
-pub fn reveal_borrow(
-    env: &Env,
-    owner: Address,
-    commit_id: u64,
-) -> Result<(Option<Address>, i128, i128), MevProtectionError> {
-    owner.require_auth();
-    let commit = validate_reveal(env, &owner, commit_id, SensitiveOperation::Borrow)?;
-    let effective_fee_bps = compute_and_enforce_fee(env, &commit)?;
-    record_ordering_signal(
-        env,
-        owner,
-        SensitiveOperation::Borrow,
-        commit.asset.clone(),
-        commit.amount,
-        effective_fee_bps,
-    );
-    env.storage()
-        .persistent()
-        .remove(&MevDataKey::Commit(commit_id));
-    Ok((commit.asset, commit.amount, effective_fee_bps))
-}
-
-/// Reveal a withdraw commit. Returns `(asset, amount)`.
-pub fn reveal_withdraw(
-    env: &Env,
-    owner: Address,
-    commit_id: u64,
-) -> Result<(Option<Address>, i128), MevProtectionError> {
-    owner.require_auth();
-    let commit = validate_reveal(env, &owner, commit_id, SensitiveOperation::Withdraw)?;
-    let effective_fee_bps = compute_and_enforce_fee(env, &commit)?;
-    record_ordering_signal(
-        env,
-        owner,
-        SensitiveOperation::Withdraw,
-        commit.asset.clone(),
-        commit.amount,
-        effective_fee_bps,
-    );
-    env.storage()
-        .persistent()
-        .remove(&MevDataKey::Commit(commit_id));
-    Ok((commit.asset, commit.amount))
-}
-
-/// Reveal a liquidation commit. Returns `(borrower, debt_asset, collateral_asset, debt_amount)`.
-pub fn reveal_liquidation(
-    env: &Env,
-    owner: Address,
-    commit_id: u64,
-) -> Result<(Address, Option<Address>, Option<Address>, i128), MevProtectionError> {
-    owner.require_auth();
-    let commit = validate_reveal(env, &owner, commit_id, SensitiveOperation::Liquidate)?;
-    let effective_fee_bps = compute_and_enforce_fee(env, &commit)?;
-    let borrower = commit
-        .borrower
-        .clone()
-        .ok_or(MevProtectionError::InvalidOperation)?;
-    record_ordering_signal(
-        env,
-        owner,
-        SensitiveOperation::Liquidate,
-        commit.asset.clone(),
-        commit.amount,
-        effective_fee_bps,
-    );
-    env.storage()
-        .persistent()
-        .remove(&MevDataKey::Commit(commit_id));
-    Ok((borrower, commit.asset, commit.secondary_asset, commit.amount))
-}
-
-/// Validate a reveal attempt: ownership, operation type, timing, and deadline.
-fn validate_reveal(
-    env: &Env,
-    owner: &Address,
-    commit_id: u64,
-    expected: SensitiveOperation,
-) -> Result<PendingCommit, MevProtectionError> {
-    let commit = load_commit(env, commit_id)?;
-    if commit.owner != *owner {
-        return Err(MevProtectionError::Unauthorized);
-    }
-    if commit.operation != expected {
-        return Err(MevProtectionError::InvalidOperation);
-    }
-    let now = env.ledger().timestamp();
-    if now < commit.reveal_after {
-        return Err(MevProtectionError::CommitNotReady);
-    }
-    if now > commit.expires_at {
-        return Err(MevProtectionError::CommitExpired);
-    }
-    // Enforce deadline
-    if commit.deadline > 0 && now > commit.deadline {
-        return Err(MevProtectionError::DeadlineExpired);
-    }
-    Ok(commit)
-}
-
-/// Compute the effective MEV fee and enforce the caller's cap.
-fn compute_and_enforce_fee(
-    env: &Env,
-    commit: &PendingCommit,
-) -> Result<i128, MevProtectionError> {
-    let effective_fee_bps = preview_fee_bps(
-        env,
-        commit.operation.clone(),
-        commit.asset.clone(),
-        commit.amount,
-    );
-    if effective_fee_bps > commit.max_fee_bps {
-        return Err(MevProtectionError::FeeCapExceeded);
-    }
-    // Update reveal stats
-    let mut stats = get_ordering_stats(env);
-    stats.total_reveals = stats.total_reveals.saturating_add(1);
-    stats.cumulative_fee_bps_collected = stats
-        .cumulative_fee_bps_collected
-        .saturating_add(effective_fee_bps);
-    env.storage()
-        .persistent()
-        .set(&MevDataKey::OrderingStats, &stats);
-    Ok(effective_fee_bps)
-}
-
-// ─── Batch Auction ────────────────────────────────────────────────────────────
-
-/// Compute the current auction slot ID from the ledger timestamp.
-fn current_slot_id(env: &Env) -> u64 {
-    let cfg = get_config(env);
-    let window = cfg.batch_window_secs.max(1);
-    env.ledger().timestamp() / window
-}
-
-/// Place a bid in the current batch liquidation auction.
-///
-/// Bids are collected during the open window and settled atomically when
-/// `settle_batch_auction` is called after the window closes.
-///
-/// # Slippage protection
-/// `min_collateral_out` is stored with the bid and enforced at settlement.
-/// If the clearing price would yield less collateral, the bid is skipped.
-#[allow(clippy::too_many_arguments)]
-pub fn place_auction_bid(
-    env: &Env,
-    bidder: Address,
-    borrower: Address,
-    debt_amount: i128,
-    min_collateral_out: i128,
-    max_fee_bps: i128,
-    deadline: u64,
-) -> Result<u64, MevProtectionError> {
-    bidder.require_auth();
-    let cfg = get_config(env);
-    if !cfg.batching_enabled {
-        return Err(MevProtectionError::InvalidConfig);
-    }
-    if debt_amount <= 0 {
-        return Err(MevProtectionError::InvalidAmount);
-    }
-    if !(0..=MAX_BPS).contains(&max_fee_bps) {
-        return Err(MevProtectionError::InvalidConfig);
-    }
-
-    let now = env.ledger().timestamp();
-    require_strict_deadline(env, deadline, MevProtectionError::DeadlineExpired)?;
-
-    let slot_id = current_slot_id(env);
-    let bids_key = MevDataKey::AuctionBids(slot_id);
-
-    let mut bids: soroban_sdk::Vec<AuctionBid> = env
-        .storage()
-        .persistent()
-        .get(&bids_key)
-        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-
-    if bids.len() >= MAX_BIDS_PER_SLOT {
-        return Err(MevProtectionError::InvalidConfig);
-    }
-
-    let bid = AuctionBid {
-        bidder,
-        borrower,
-        debt_amount,
-        min_collateral_out,
-        max_fee_bps,
-        placed_at: now,
-        deadline: if deadline == 0 {
-            now.saturating_add(cfg.batch_window_secs.saturating_mul(2))
-        } else {
-            deadline
-        },
-    };
-    bids.push_back(bid);
-    env.storage().persistent().set(&bids_key, &bids);
-
-    // Update stats
-    let mut stats = get_ordering_stats(env);
-    stats.total_auction_bids = stats.total_auction_bids.saturating_add(1);
-    env.storage()
-        .persistent()
-        .set(&MevDataKey::OrderingStats, &stats);
-
-    Ok(slot_id)
-}
-
-/// Settle a closed batch auction slot.
-///
-/// Can only be called after the slot's window has closed. Computes a uniform
-/// clearing fee as the median of all valid bids' `max_fee_bps`, then returns
-/// the `AuctionResult` for the caller to execute individual liquidations.
-///
-/// Bids whose `deadline` has passed or whose `min_collateral_out` cannot be
-/// satisfied at the clearing fee are excluded from the result.
-pub fn settle_batch_auction(
-    env: &Env,
-    caller: Address,
-    slot_id: u64,
-) -> Result<AuctionResult, MevProtectionError> {
-    caller.require_auth();
-    let cfg = get_config(env);
-    if !cfg.batching_enabled {
-        return Err(MevProtectionError::InvalidConfig);
-    }
-
-    let now = env.ledger().timestamp();
-    let slot_end = slot_id
-        .saturating_add(1)
-        .saturating_mul(cfg.batch_window_secs);
-    if now < slot_end {
-        return Err(MevProtectionError::AuctionWindowOpen);
-    }
-
-    // Check not already settled
-    let result_key = MevDataKey::AuctionResult(slot_id);
-    if env
-        .storage()
-        .persistent()
-        .has(&result_key)
-    {
-        // Return cached result
-        return env
-            .storage()
-            .persistent()
-            .get(&result_key)
-            .ok_or(MevProtectionError::NoBidsInAuction);
-    }
-
-    let bids_key = MevDataKey::AuctionBids(slot_id);
-    let bids: soroban_sdk::Vec<AuctionBid> = env
-        .storage()
-        .persistent()
-        .get(&bids_key)
-        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
-
-    if bids.is_empty() {
-        return Err(MevProtectionError::NoBidsInAuction);
-    }
-
-    // Filter valid bids (deadline not passed)
-    let mut valid_fee_sum: i128 = 0;
-    let mut valid_count: u32 = 0;
-    let mut total_debt: i128 = 0;
-
-    for bid in bids.iter() {
-        if is_expired_strict(env, bid.deadline) {
-            continue;
-        }
-        valid_fee_sum = valid_fee_sum.saturating_add(bid.max_fee_bps);
-        valid_count = valid_count.saturating_add(1);
-        total_debt = total_debt.saturating_add(bid.debt_amount);
-    }
-
-    if valid_count == 0 {
-        return Err(MevProtectionError::NoBidsInAuction);
-    }
-
-    // Clearing fee = average of valid bids' max_fee_bps (simple uniform price)
-    let clearing_fee_bps = valid_fee_sum
-        .checked_div(valid_count as i128)
-        .unwrap_or(cfg.base_protection_fee_bps)
-        .clamp(cfg.base_protection_fee_bps, MAX_BPS);
-
-    let result = AuctionResult {
-        slot_id,
-        bid_count: valid_count,
-        clearing_fee_bps,
-        total_debt_liquidated: total_debt,
-        settled_at: now,
-    };
-
-    env.storage().persistent().set(&result_key, &result);
-
-    // Update stats
-    let mut stats = get_ordering_stats(env);
-    stats.total_auctions_settled = stats.total_auctions_settled.saturating_add(1);
-    env.storage()
-        .persistent()
-        .set(&MevDataKey::OrderingStats, &stats);
-
-    Ok(result)
-}
-
-/// Retrieve bids for a given auction slot.
-pub fn get_auction_bids(env: &Env, slot_id: u64) -> soroban_sdk::Vec<AuctionBid> {
-    env.storage()
-        .persistent()
-        .get(&MevDataKey::AuctionBids(slot_id))
-        .unwrap_or_else(|| soroban_sdk::Vec::new(env))
-}
-
-/// Retrieve the settled result for a given auction slot (None if not yet settled).
-pub fn get_auction_result(env: &Env, slot_id: u64) -> Option<AuctionResult> {
-    env.storage()
-        .persistent()
-        .get(&MevDataKey::AuctionResult(slot_id))
-}
-
-/// Return the current open auction slot ID.
-pub fn get_current_auction_slot(env: &Env) -> u64 {
-    current_slot_id(env)
-}
-
-// ─── Fee Preview & Gas Bidding Analysis ──────────────────────────────────────
-
-/// Preview the effective MEV protection fee for an operation without committing.
-///
-/// Uses an EMA of past observations to smooth fee volatility. Surges when
-/// suspicious ordering activity is detected within the configured window.
 pub fn preview_fee_bps(
     env: &Env,
     operation: SensitiveOperation,
@@ -799,63 +440,6 @@ pub fn preview_fee_bps(
     smoothed.clamp(0, MAX_BPS)
 }
 
-/// Return a gas bidding analysis snapshot for the given operation and asset.
-///
-/// Callers (off-chain relayers, frontends) use this to decide how much to bid
-/// in order to get their transaction included without overpaying.
-pub fn get_gas_bid_analysis(
-    env: &Env,
-    operation: SensitiveOperation,
-    asset: Option<Address>,
-    amount: i128,
-) -> GasBidAnalysis {
-    let cfg = get_config(env);
-    let op_key = operation_symbol(env, &operation);
-    let now = env.ledger().timestamp();
-
-    let smoothed_base = env
-        .storage()
-        .persistent()
-        .get::<MevDataKey, i128>(&MevDataKey::SmoothedFee(op_key.clone(), asset.clone()))
-        .unwrap_or(cfg.base_protection_fee_bps);
-
-    let latest: Option<OrderingObservation> = env
-        .storage()
-        .persistent()
-        .get(&MevDataKey::LatestObservation(op_key, asset.clone()));
-
-    let in_suspicious_window = latest
-        .as_ref()
-        .map(|obs| now.saturating_sub(obs.timestamp) <= cfg.suspicious_window_secs)
-        .unwrap_or(false);
-
-    let current_surge = if in_suspicious_window {
-        cfg.surge_protection_fee_bps
-    } else {
-        0
-    };
-
-    let recommended = preview_fee_bps(env, operation.clone(), asset.clone(), amount);
-    // High-congestion bid: surge + 20% buffer
-    let high_congestion = recommended
-        .saturating_add(cfg.base_protection_fee_bps.saturating_mul(2))
-        .clamp(0, MAX_BPS);
-
-    let stats = get_ordering_stats(env);
-
-    GasBidAnalysis {
-        smoothed_base_fee_bps: smoothed_base,
-        current_surge_fee_bps: current_surge,
-        recommended_bid_bps: recommended,
-        high_congestion_bid_bps: high_congestion,
-        in_suspicious_window,
-        recent_sandwich_alerts: stats.sandwich_alerts,
-    }
-}
-
-// ─── Routing Hints ────────────────────────────────────────────────────────────
-
-/// Return the recommended execution routing hint given the caller's preference.
 pub fn execution_hint(env: &Env, requested: TxOrderingHint) -> TxOrderingHint {
     let cfg = get_config(env);
     match requested {
@@ -869,7 +453,10 @@ pub fn execution_hint(env: &Env, requested: TxOrderingHint) -> TxOrderingHint {
     }
 }
 
-/// Return human-readable guidance for the given operation.
+pub fn requires_commit_reveal(env: &Env, amount: i128) -> bool {
+    amount >= get_config(env).large_tx_threshold
+}
+
 pub fn user_guidance(env: &Env, operation: SensitiveOperation) -> String {
     match (operation, execution_hint(env, TxOrderingHint::Default)) {
         (SensitiveOperation::Borrow, TxOrderingHint::PrivateMempool) => String::from_str(
@@ -895,9 +482,6 @@ pub fn user_guidance(env: &Env, operation: SensitiveOperation) -> String {
     }
 }
 
-// ─── Monitoring / Stats ───────────────────────────────────────────────────────
-
-/// Return the current MEV ordering statistics (monitoring dashboard data).
 pub fn get_ordering_stats(env: &Env) -> OrderingStats {
     env.storage()
         .persistent()
@@ -907,17 +491,589 @@ pub fn get_ordering_stats(env: &Env) -> OrderingStats {
             sandwich_alerts: 0,
             last_alert_timestamp: 0,
             last_effective_fee_bps: 0,
-            total_commits: 0,
-            total_reveals: 0,
-            total_auction_bids: 0,
-            total_auctions_settled: 0,
-            cumulative_fee_bps_collected: 0,
         })
 }
 
-// ─── Internal Helpers ─────────────────────────────────────────────────────────
+pub fn get_auction_stats(env: &Env) -> AuctionStats {
+    env.storage()
+        .persistent()
+        .get(&MevDataKey::AuctionStats)
+        .unwrap_or(AuctionStats {
+            opened: 0,
+            bids: 0,
+            settled: 0,
+            executed: 0,
+            last_auction_id: 0,
+            last_settled_timestamp: 0,
+        })
+}
 
-/// Record an ordering observation and update sandwich / suspicious-sequence counters.
+pub fn get_private_route_stats(env: &Env) -> PrivateRouteStats {
+    env.storage()
+        .persistent()
+        .get(&MevDataKey::PrivateStats)
+        .unwrap_or(PrivateRouteStats {
+            active_routes: 0,
+            executions: 0,
+            last_execution_timestamp: 0,
+        })
+}
+
+pub fn get_gas_bid_stats(
+    env: &Env,
+    operation: SensitiveOperation,
+    asset: Option<Address>,
+) -> GasBidStats {
+    let key = MevDataKey::GasBidStats(operation_symbol(env, &operation), asset);
+    env.storage().persistent().get(&key).unwrap_or(GasBidStats {
+        samples: 0,
+        min_bid_microlumens: 0,
+        max_bid_microlumens: 0,
+        avg_bid_microlumens: 0,
+        last_bid_microlumens: 0,
+        avg_inclusion_delay_ledgers: 0,
+        last_updated: 0,
+    })
+}
+
+pub fn get_monitoring_dashboard(
+    env: &Env,
+    operation: SensitiveOperation,
+    asset: Option<Address>,
+    amount: i128,
+) -> MevMonitoringDashboard {
+    let recommended_hint = execution_hint(env, TxOrderingHint::Default);
+    let recommended_fee_bps = preview_fee_bps(env, operation.clone(), asset.clone(), amount);
+    MevMonitoringDashboard {
+        ordering: get_ordering_stats(env),
+        gas_bids: get_gas_bid_stats(env, operation, asset),
+        auctions: get_auction_stats(env),
+        private_routes: get_private_route_stats(env),
+        recommended_fee_bps,
+        recommended_hint,
+    }
+}
+
+pub fn record_gas_bid_sample(
+    env: &Env,
+    reporter: Address,
+    operation: SensitiveOperation,
+    asset: Option<Address>,
+    bid_microlumens: i128,
+    inclusion_delay_ledgers: u64,
+) -> Result<GasBidStats, MevProtectionError> {
+    reporter.require_auth();
+    if bid_microlumens <= 0 {
+        return Err(MevProtectionError::InvalidAmount);
+    }
+
+    let key = MevDataKey::GasBidStats(operation_symbol(env, &operation), asset);
+    let mut stats = env.storage().persistent().get(&key).unwrap_or(GasBidStats {
+        samples: 0,
+        min_bid_microlumens: bid_microlumens,
+        max_bid_microlumens: bid_microlumens,
+        avg_bid_microlumens: 0,
+        last_bid_microlumens: 0,
+        avg_inclusion_delay_ledgers: 0,
+        last_updated: 0,
+    });
+
+    let next_samples = stats.samples.saturating_add(1);
+    stats.min_bid_microlumens = if stats.samples == 0 {
+        bid_microlumens
+    } else {
+        stats.min_bid_microlumens.min(bid_microlumens)
+    };
+    stats.max_bid_microlumens = stats.max_bid_microlumens.max(bid_microlumens);
+    stats.avg_bid_microlumens = stats
+        .avg_bid_microlumens
+        .saturating_mul(i128::from(stats.samples))
+        .saturating_add(bid_microlumens)
+        .saturating_div(i128::from(next_samples));
+    stats.avg_inclusion_delay_ledgers = stats
+        .avg_inclusion_delay_ledgers
+        .saturating_mul(stats.samples)
+        .saturating_add(inclusion_delay_ledgers)
+        .saturating_div(next_samples);
+    stats.samples = next_samples;
+    stats.last_bid_microlumens = bid_microlumens;
+    stats.last_updated = env.ledger().timestamp();
+
+    env.storage().persistent().set(&key, &stats);
+    Ok(stats)
+}
+
+pub fn register_private_route(
+    env: &Env,
+    caller: Address,
+    route_id: Symbol,
+    relay: Address,
+    ttl_secs: u64,
+) -> Result<PrivateMempoolRoute, MevProtectionError> {
+    caller.require_auth();
+    let cfg = get_config(env);
+    if !cfg.private_mempool_enabled || ttl_secs == 0 || ttl_secs > cfg.max_private_route_ttl_secs {
+        return Err(MevProtectionError::InvalidConfig);
+    }
+
+    let now = env.ledger().timestamp();
+    let existed: Option<PrivateMempoolRoute> = env
+        .storage()
+        .persistent()
+        .get(&MevDataKey::PrivateRoute(route_id.clone()));
+    let route = PrivateMempoolRoute {
+        route_id: route_id.clone(),
+        relay,
+        registered_by: caller,
+        registered_at: now,
+        expires_at: now.saturating_add(ttl_secs),
+        active: true,
+    };
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::PrivateRoute(route_id), &route);
+
+    if existed.is_none() {
+        let mut stats = get_private_route_stats(env);
+        stats.active_routes = stats.active_routes.saturating_add(1);
+        env.storage()
+            .persistent()
+            .set(&MevDataKey::PrivateStats, &stats);
+    }
+    Ok(route)
+}
+
+pub fn get_private_route(env: &Env, route_id: Symbol) -> Option<PrivateMempoolRoute> {
+    env.storage()
+        .persistent()
+        .get(&MevDataKey::PrivateRoute(route_id))
+}
+
+pub fn record_private_execution(
+    env: &Env,
+    relay: Address,
+    commit_id: u64,
+    route_id: Symbol,
+) -> Result<PrivateExecutionReceipt, MevProtectionError> {
+    relay.require_auth();
+    let commit = load_commit(env, commit_id)?;
+    let route = ensure_private_route(env, &route_id)?;
+    if route.relay != relay {
+        return Err(MevProtectionError::Unauthorized);
+    }
+    if commit.hint != TxOrderingHint::PrivateMempool {
+        return Err(MevProtectionError::InvalidOperation);
+    }
+    if let Some(ref expected_route) = commit.private_route {
+        if expected_route != &route_id {
+            return Err(MevProtectionError::PrivateRouteRequired);
+        }
+    }
+
+    let now = env.ledger().timestamp();
+    let receipt = PrivateExecutionReceipt {
+        commit_id,
+        route_id: route.route_id,
+        relay,
+        received_at: now,
+        expires_at: commit.expires_at,
+    };
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::PrivateReceipt(commit_id), &receipt);
+
+    let mut stats = get_private_route_stats(env);
+    stats.executions = stats.executions.saturating_add(1);
+    stats.last_execution_timestamp = now;
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::PrivateStats, &stats);
+    Ok(receipt)
+}
+
+pub fn open_liquidation_auction(
+    env: &Env,
+    opener: Address,
+    borrower: Address,
+    debt_asset: Option<Address>,
+    collateral_asset: Option<Address>,
+    debt_amount: i128,
+    min_rebate_bps: i128,
+    bidding_period_secs: u64,
+) -> Result<u64, MevProtectionError> {
+    opener.require_auth();
+    let cfg = get_config(env);
+    if !cfg.batching_enabled {
+        return Err(MevProtectionError::InvalidConfig);
+    }
+    if debt_amount <= 0 {
+        return Err(MevProtectionError::InvalidAmount);
+    }
+    if !(0..=MAX_BPS).contains(&min_rebate_bps) || min_rebate_bps < cfg.min_auction_bid_rebate_bps {
+        return Err(MevProtectionError::InvalidConfig);
+    }
+
+    let now = env.ledger().timestamp();
+    let auction_id = next_auction_id(env);
+    let auction_secs = if bidding_period_secs == 0 {
+        cfg.default_auction_secs
+    } else {
+        bidding_period_secs
+    };
+    let auction = LiquidationAuction {
+        id: auction_id,
+        opener,
+        borrower,
+        debt_asset,
+        collateral_asset,
+        debt_amount,
+        min_rebate_bps,
+        opened_at: now,
+        bidding_deadline: now.saturating_add(auction_secs),
+        status: AuctionStatus::Open,
+        best_bid_id: None,
+        winning_liquidator: None,
+    };
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::Auction(auction_id), &auction);
+
+    let mut stats = get_auction_stats(env);
+    stats.opened = stats.opened.saturating_add(1);
+    stats.last_auction_id = auction_id;
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::AuctionStats, &stats);
+    Ok(auction_id)
+}
+
+pub fn submit_liquidation_bid(
+    env: &Env,
+    liquidator: Address,
+    auction_id: u64,
+    repay_amount: i128,
+    rebate_bps: i128,
+    max_fee_bps: i128,
+    min_collateral_out: i128,
+    private_route: Option<Symbol>,
+) -> Result<u64, MevProtectionError> {
+    liquidator.require_auth();
+    if repay_amount <= 0 || min_collateral_out < 0 {
+        return Err(MevProtectionError::InvalidAmount);
+    }
+    if !(0..=MAX_BPS).contains(&rebate_bps) || !(0..=MAX_BPS).contains(&max_fee_bps) {
+        return Err(MevProtectionError::InvalidConfig);
+    }
+    if let Some(ref route_id) = private_route {
+        ensure_private_route(env, route_id)?;
+    }
+
+    let mut auction = load_auction(env, auction_id)?;
+    let now = env.ledger().timestamp();
+    if auction.status != AuctionStatus::Open || now > auction.bidding_deadline {
+        return Err(MevProtectionError::AuctionNotOpen);
+    }
+    if rebate_bps < auction.min_rebate_bps {
+        return Err(MevProtectionError::BidTooLow);
+    }
+
+    let bid_id = next_bid_id(env);
+    let bid = LiquidationAuctionBid {
+        id: bid_id,
+        auction_id,
+        liquidator,
+        repay_amount,
+        rebate_bps,
+        max_fee_bps,
+        min_collateral_out,
+        private_route,
+        submitted_at: now,
+    };
+
+    let replaces_best = match auction.best_bid_id {
+        None => true,
+        Some(best_id) => {
+            let best = load_bid(env, best_id)?;
+            bid.rebate_bps > best.rebate_bps
+                || (bid.rebate_bps == best.rebate_bps && bid.repay_amount > best.repay_amount)
+        }
+    };
+    if replaces_best {
+        auction.best_bid_id = Some(bid_id);
+        auction.winning_liquidator = Some(bid.liquidator.clone());
+        env.storage()
+            .persistent()
+            .set(&MevDataKey::Auction(auction_id), &auction);
+    }
+
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::AuctionBid(bid_id), &bid);
+    let mut stats = get_auction_stats(env);
+    stats.bids = stats.bids.saturating_add(1);
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::AuctionStats, &stats);
+    Ok(bid_id)
+}
+
+pub fn settle_liquidation_auction(
+    env: &Env,
+    caller: Address,
+    auction_id: u64,
+) -> Result<LiquidationAuctionBid, MevProtectionError> {
+    caller.require_auth();
+    let mut auction = load_auction(env, auction_id)?;
+    let now = env.ledger().timestamp();
+    if auction.status != AuctionStatus::Open {
+        return Err(MevProtectionError::AuctionNotOpen);
+    }
+    if now <= auction.bidding_deadline {
+        return Err(MevProtectionError::AuctionNotReady);
+    }
+    let best_id = auction.best_bid_id.ok_or(MevProtectionError::BidNotFound)?;
+    let best = load_bid(env, best_id)?;
+
+    auction.status = AuctionStatus::Settled;
+    auction.winning_liquidator = Some(best.liquidator.clone());
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::Auction(auction_id), &auction);
+
+    let mut stats = get_auction_stats(env);
+    stats.settled = stats.settled.saturating_add(1);
+    stats.last_settled_timestamp = now;
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::AuctionStats, &stats);
+    Ok(best)
+}
+
+pub fn get_liquidation_auction(env: &Env, auction_id: u64) -> Option<LiquidationAuction> {
+    env.storage()
+        .persistent()
+        .get(&MevDataKey::Auction(auction_id))
+}
+
+pub fn get_liquidation_bid(env: &Env, bid_id: u64) -> Option<LiquidationAuctionBid> {
+    env.storage()
+        .persistent()
+        .get(&MevDataKey::AuctionBid(bid_id))
+}
+
+pub fn create_liquidation_auction_commit(
+    env: &Env,
+    liquidator: Address,
+    auction_id: u64,
+    guard: ExecutionGuard,
+    private_route: Option<Symbol>,
+) -> Result<u64, MevProtectionError> {
+    let auction = load_auction(env, auction_id)?;
+    if auction.status != AuctionStatus::Settled {
+        return Err(MevProtectionError::AuctionNotReady);
+    }
+    let best_id = auction.best_bid_id.ok_or(MevProtectionError::BidNotFound)?;
+    let best = load_bid(env, best_id)?;
+    if best.liquidator != liquidator {
+        return Err(MevProtectionError::Unauthorized);
+    }
+    if guard.min_output_amount < best.min_collateral_out {
+        return Err(MevProtectionError::SlippageExceeded);
+    }
+
+    create_commit_with_context(
+        env,
+        liquidator,
+        SensitiveOperation::Liquidate,
+        auction.debt_asset,
+        auction.collateral_asset,
+        Some(auction.borrower),
+        auction.debt_amount,
+        best.max_fee_bps,
+        TxOrderingHint::BatchAuction,
+        Some(guard),
+        private_route,
+        Some(auction_id),
+    )
+}
+
+pub fn reveal_borrow(
+    env: &Env,
+    owner: Address,
+    commit_id: u64,
+) -> Result<(Option<Address>, i128, i128), MevProtectionError> {
+    owner.require_auth();
+    let commit = validate_reveal(env, &owner, commit_id, SensitiveOperation::Borrow)?;
+    validate_guard_if_present(env, &commit, commit.amount)?;
+    validate_private_receipt_if_needed(env, &commit)?;
+    let effective_fee_bps = preview_fee_bps(
+        env,
+        SensitiveOperation::Borrow,
+        commit.asset.clone(),
+        commit.amount,
+    );
+    if effective_fee_bps > commit.max_fee_bps {
+        return Err(MevProtectionError::FeeCapExceeded);
+    }
+    record_ordering_signal(
+        env,
+        owner,
+        SensitiveOperation::Borrow,
+        commit.asset.clone(),
+        commit.amount,
+        effective_fee_bps,
+    );
+    env.storage()
+        .persistent()
+        .remove(&MevDataKey::Commit(commit_id));
+    Ok((commit.asset, commit.amount, effective_fee_bps))
+}
+
+pub fn reveal_withdraw(
+    env: &Env,
+    owner: Address,
+    commit_id: u64,
+) -> Result<(Option<Address>, i128), MevProtectionError> {
+    owner.require_auth();
+    let commit = validate_reveal(env, &owner, commit_id, SensitiveOperation::Withdraw)?;
+    validate_guard_if_present(env, &commit, commit.amount)?;
+    validate_private_receipt_if_needed(env, &commit)?;
+    let effective_fee_bps = preview_fee_bps(
+        env,
+        SensitiveOperation::Withdraw,
+        commit.asset.clone(),
+        commit.amount,
+    );
+    if effective_fee_bps > commit.max_fee_bps {
+        return Err(MevProtectionError::FeeCapExceeded);
+    }
+    record_ordering_signal(
+        env,
+        owner,
+        SensitiveOperation::Withdraw,
+        commit.asset.clone(),
+        commit.amount,
+        effective_fee_bps,
+    );
+    env.storage()
+        .persistent()
+        .remove(&MevDataKey::Commit(commit_id));
+    Ok((commit.asset, commit.amount))
+}
+
+pub fn reveal_liquidation(
+    env: &Env,
+    owner: Address,
+    commit_id: u64,
+) -> Result<(Address, Option<Address>, Option<Address>, i128), MevProtectionError> {
+    owner.require_auth();
+    let commit = validate_reveal(env, &owner, commit_id, SensitiveOperation::Liquidate)?;
+    if commit.guard.is_some() {
+        return Err(MevProtectionError::InvalidOperation);
+    }
+    validate_private_receipt_if_needed(env, &commit)?;
+    validate_auction_commit_if_needed(env, &commit)?;
+    let effective_fee_bps = preview_fee_bps(
+        env,
+        SensitiveOperation::Liquidate,
+        commit.asset.clone(),
+        commit.amount,
+    );
+    if effective_fee_bps > commit.max_fee_bps {
+        return Err(MevProtectionError::FeeCapExceeded);
+    }
+    let borrower = commit
+        .borrower
+        .clone()
+        .ok_or(MevProtectionError::InvalidOperation)?;
+    record_ordering_signal(
+        env,
+        owner,
+        SensitiveOperation::Liquidate,
+        commit.asset.clone(),
+        commit.amount,
+        effective_fee_bps,
+    );
+    env.storage()
+        .persistent()
+        .remove(&MevDataKey::Commit(commit_id));
+    record_auction_execution_if_needed(env, &commit);
+    Ok((
+        borrower,
+        commit.asset,
+        commit.secondary_asset,
+        commit.amount,
+    ))
+}
+
+pub fn reveal_liquidation_with_output(
+    env: &Env,
+    owner: Address,
+    commit_id: u64,
+    expected_collateral_out: i128,
+) -> Result<(Address, Option<Address>, Option<Address>, i128), MevProtectionError> {
+    owner.require_auth();
+    let commit = validate_reveal(env, &owner, commit_id, SensitiveOperation::Liquidate)?;
+    validate_guard_if_present(env, &commit, expected_collateral_out)?;
+    validate_private_receipt_if_needed(env, &commit)?;
+    validate_auction_commit_if_needed(env, &commit)?;
+
+    let effective_fee_bps = preview_fee_bps(
+        env,
+        SensitiveOperation::Liquidate,
+        commit.asset.clone(),
+        commit.amount,
+    );
+    if effective_fee_bps > commit.max_fee_bps {
+        return Err(MevProtectionError::FeeCapExceeded);
+    }
+    let borrower = commit
+        .borrower
+        .clone()
+        .ok_or(MevProtectionError::InvalidOperation)?;
+    record_ordering_signal(
+        env,
+        owner,
+        SensitiveOperation::Liquidate,
+        commit.asset.clone(),
+        commit.amount,
+        effective_fee_bps,
+    );
+    env.storage()
+        .persistent()
+        .remove(&MevDataKey::Commit(commit_id));
+    record_auction_execution_if_needed(env, &commit);
+    Ok((
+        borrower,
+        commit.asset,
+        commit.secondary_asset,
+        commit.amount,
+    ))
+}
+
+fn validate_reveal(
+    env: &Env,
+    owner: &Address,
+    commit_id: u64,
+    expected: SensitiveOperation,
+) -> Result<PendingCommit, MevProtectionError> {
+    let commit = load_commit(env, commit_id)?;
+    if commit.owner != *owner {
+        return Err(MevProtectionError::Unauthorized);
+    }
+    if commit.operation != expected {
+        return Err(MevProtectionError::InvalidOperation);
+    }
+    let now = env.ledger().timestamp();
+    if now < commit.reveal_after {
+        return Err(MevProtectionError::CommitNotReady);
+    }
+    if now > commit.expires_at {
+        return Err(MevProtectionError::CommitExpired);
+    }
+    Ok(commit)
+}
+
 fn record_ordering_signal(
     env: &Env,
     actor: Address,
@@ -936,18 +1092,13 @@ fn record_ordering_signal(
     let previous: Option<OrderingObservation> = env.storage().persistent().get(&previous_key);
     let mut stats = get_ordering_stats(env);
 
-    // Detect suspicious ordering: two different actors within the window
-    if let Some(ref last) = latest {
-        if now.saturating_sub(last.timestamp) <= cfg.suspicious_window_secs
-            && last.actor != actor
-        {
+    if let Some(last) = latest.clone() {
+        if now.saturating_sub(last.timestamp) <= cfg.suspicious_window_secs && last.actor != actor {
             stats.suspicious_sequences = stats.suspicious_sequences.saturating_add(1);
         }
     }
 
-    // Detect sandwich: prev.actor == current.actor, last.actor != current.actor,
-    // and amounts are close (front-run / back-run pattern).
-    if let (Some(ref prev), Some(ref last)) = (&previous, &latest) {
+    if let (Some(prev), Some(last)) = (previous.clone(), latest.clone()) {
         let prev_recent = now.saturating_sub(prev.timestamp) <= cfg.suspicious_window_secs;
         let last_recent = now.saturating_sub(last.timestamp) <= cfg.suspicious_window_secs;
         if prev_recent
@@ -965,8 +1116,6 @@ fn record_ordering_signal(
     env.storage()
         .persistent()
         .set(&MevDataKey::OrderingStats, &stats);
-
-    // Rotate observations: latest → previous, new → latest
     if let Some(last) = latest {
         env.storage().persistent().set(&previous_key, &last);
     }
@@ -1002,24 +1151,167 @@ fn next_commit_id(env: &Env) -> u64 {
     id
 }
 
-fn validate_config(config: &MevProtectionConfig) -> Result<(), MevProtectionError> {
-    if config.commit_delay_secs == 0
-        || config.commit_expiry_secs <= config.commit_delay_secs
-        || config.suspicious_window_secs == 0
-        || config.batch_window_secs == 0
-        || !(0..=MAX_BPS).contains(&config.fee_smoothing_bps)
-        || !(0..=MAX_BPS).contains(&config.base_protection_fee_bps)
-        || !(0..=MAX_BPS).contains(&config.surge_protection_fee_bps)
-        || !(0..=MAX_BPS).contains(&config.sandwich_threshold_bps)
-        || !(0..=MAX_BPS).contains(&config.default_max_slippage_bps)
+fn next_auction_id(env: &Env) -> u64 {
+    let id = env
+        .storage()
+        .persistent()
+        .get::<MevDataKey, u64>(&MevDataKey::NextAuctionId)
+        .unwrap_or(1);
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::NextAuctionId, &id.saturating_add(1));
+    id
+}
+
+fn next_bid_id(env: &Env) -> u64 {
+    let id = env
+        .storage()
+        .persistent()
+        .get::<MevDataKey, u64>(&MevDataKey::NextBidId)
+        .unwrap_or(1);
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::NextBidId, &id.saturating_add(1));
+    id
+}
+
+fn load_auction(env: &Env, auction_id: u64) -> Result<LiquidationAuction, MevProtectionError> {
+    env.storage()
+        .persistent()
+        .get(&MevDataKey::Auction(auction_id))
+        .ok_or(MevProtectionError::AuctionNotFound)
+}
+
+fn load_bid(env: &Env, bid_id: u64) -> Result<LiquidationAuctionBid, MevProtectionError> {
+    env.storage()
+        .persistent()
+        .get(&MevDataKey::AuctionBid(bid_id))
+        .ok_or(MevProtectionError::BidNotFound)
+}
+
+fn ensure_private_route(
+    env: &Env,
+    route_id: &Symbol,
+) -> Result<PrivateMempoolRoute, MevProtectionError> {
+    let route: PrivateMempoolRoute = env
+        .storage()
+        .persistent()
+        .get(&MevDataKey::PrivateRoute(route_id.clone()))
+        .ok_or(MevProtectionError::PrivateRouteNotFound)?;
+    if !route.active || env.ledger().timestamp() > route.expires_at {
+        return Err(MevProtectionError::PrivateRouteNotFound);
+    }
+    Ok(route)
+}
+
+fn ensure_auction_for_commit(
+    env: &Env,
+    auction_id: u64,
+    liquidator: &Address,
+) -> Result<(), MevProtectionError> {
+    let auction = load_auction(env, auction_id)?;
+    if auction.status != AuctionStatus::Settled {
+        return Err(MevProtectionError::AuctionNotReady);
+    }
+    if auction.winning_liquidator.as_ref() != Some(liquidator) {
+        return Err(MevProtectionError::Unauthorized);
+    }
+    Ok(())
+}
+
+fn validate_guard_config(env: &Env, guard: &ExecutionGuard) -> Result<(), MevProtectionError> {
+    if guard.quoted_output_amount <= 0
+        || guard.min_output_amount < 0
+        || guard.min_output_amount > guard.quoted_output_amount
+        || !(0..=MAX_BPS).contains(&guard.max_slippage_bps)
+        || guard.deadline <= env.ledger().timestamp()
     {
         return Err(MevProtectionError::InvalidConfig);
     }
     Ok(())
 }
 
-/// Returns true when the absolute difference between `a` and `b` is within
-/// `threshold_bps` of the larger value.
+fn validate_guard_if_present(
+    env: &Env,
+    commit: &PendingCommit,
+    actual_output_amount: i128,
+) -> Result<(), MevProtectionError> {
+    let Some(ref guard) = commit.guard else {
+        return Ok(());
+    };
+    if env.ledger().timestamp() > guard.deadline {
+        return Err(MevProtectionError::SlippageExpired);
+    }
+
+    let slippage_floor = guard
+        .quoted_output_amount
+        .saturating_mul(MAX_BPS.saturating_sub(guard.max_slippage_bps))
+        .saturating_div(MAX_BPS);
+    let required_output = guard.min_output_amount.max(slippage_floor);
+    if actual_output_amount < required_output {
+        return Err(MevProtectionError::SlippageExceeded);
+    }
+    Ok(())
+}
+
+fn validate_private_receipt_if_needed(
+    env: &Env,
+    commit: &PendingCommit,
+) -> Result<(), MevProtectionError> {
+    let Some(ref route_id) = commit.private_route else {
+        return Ok(());
+    };
+    let receipt: PrivateExecutionReceipt = env
+        .storage()
+        .persistent()
+        .get(&MevDataKey::PrivateReceipt(commit.id))
+        .ok_or(MevProtectionError::PrivateRouteRequired)?;
+    if &receipt.route_id != route_id || env.ledger().timestamp() > receipt.expires_at {
+        return Err(MevProtectionError::PrivateRouteRequired);
+    }
+    ensure_private_route(env, route_id)?;
+    Ok(())
+}
+
+fn validate_auction_commit_if_needed(
+    env: &Env,
+    commit: &PendingCommit,
+) -> Result<(), MevProtectionError> {
+    let Some(auction_id) = commit.auction_id else {
+        return Ok(());
+    };
+    ensure_auction_for_commit(env, auction_id, &commit.owner)
+}
+
+fn record_auction_execution_if_needed(env: &Env, commit: &PendingCommit) {
+    if commit.auction_id.is_none() {
+        return;
+    }
+    let mut stats = get_auction_stats(env);
+    stats.executed = stats.executed.saturating_add(1);
+    env.storage()
+        .persistent()
+        .set(&MevDataKey::AuctionStats, &stats);
+}
+
+fn validate_config(config: &MevProtectionConfig) -> Result<(), MevProtectionError> {
+    if config.commit_delay_secs == 0
+        || config.commit_expiry_secs <= config.commit_delay_secs
+        || config.suspicious_window_secs == 0
+        || !(0..=MAX_BPS).contains(&config.fee_smoothing_bps)
+        || !(0..=MAX_BPS).contains(&config.base_protection_fee_bps)
+        || !(0..=MAX_BPS).contains(&config.surge_protection_fee_bps)
+        || !(0..=MAX_BPS).contains(&config.sandwich_threshold_bps)
+        || config.large_tx_threshold <= 0
+        || config.default_auction_secs == 0
+        || !(0..=MAX_BPS).contains(&config.min_auction_bid_rebate_bps)
+        || config.max_private_route_ttl_secs == 0
+    {
+        return Err(MevProtectionError::InvalidConfig);
+    }
+    Ok(())
+}
+
 fn amounts_close(a: i128, b: i128, threshold_bps: i128) -> bool {
     if a == 0 && b == 0 {
         return true;

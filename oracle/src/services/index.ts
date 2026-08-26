@@ -36,6 +36,9 @@ export type { OracleIncident } from './oracle-incident-monitor.js';
 export { TWAPService, createTWAPService } from './twap.service.js';
 export type { TWAPConfig, TWAPStatus } from './twap.service.js';
 
+export { quoteAsset, quoteBasket, debtCollateralRatio } from './multi-asset-prices.js';
+export type { AssetPriceQuote } from './multi-asset-prices.js';
+
 export {
     ManipulationDetector,
     AlertSeverity,

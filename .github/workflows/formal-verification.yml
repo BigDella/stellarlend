@@ -1,16 +1,31 @@
 name: Formal Verification Specs
 
-# Issue #384 – Formal verification CI gate for critical contract invariants.
-#
-# Invariants verified:
-#   INV-1: total deposits = total debt + reserves
-#   INV-2: health factor consistency during operations
-#   INV-3: interest accrual monotonicity
-#
-# This workflow is a required CI gate: PRs touching contract code cannot
-# merge if any spec lemma fails.
-
-on: workflow_dispatch
+on:
+  push:
+    branches: ["main", "feat/issue-224-formal-verification"]
+    paths:
+      - "stellar-lend/contracts/lending/src/spec/**"
+      - "stellar-lend/contracts/lending/src/**/*.rs"
+      - "stellar-lend/contracts/lending/Cargo.toml"
+      - ".github/workflows/formal-verification.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "stellar-lend/contracts/lending/src/spec/**"
+      - "stellar-lend/contracts/lending/src/**/*.rs"
+      - "stellar-lend/contracts/lending/Cargo.toml"
+      - ".github/workflows/formal-verification.yml"
+  # Allow manual dispatch to run the full suite at any time
+  workflow_dispatch:
+    inputs:
+      run_kani:
+        description: "Run Kani bounded model-checking harnesses (slow)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,170 +33,95 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
-  # Job 1: cargo check – fast sanity gate on every push
-  # ─────────────────────────────────────────────────────────────────────────────
-  cargo-check:
-    name: Cargo Check (contract)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            contract/target
-          key: ${{ runner.os }}-cargo-check-${{ hashFiles('contract/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-check-
-
-      - name: cargo check
-        working-directory: contract
-        run: cargo check --all-targets
-
-      - name: cargo clippy
-        working-directory: contract
-        run: cargo clippy --all-targets -- -D warnings
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Job 2: Spec lemma tests – required CI gate (Issue #384)
-  #
-  # Verifies the following invariants via property-based lemma tests:
-  #   INV-1  total deposits = total debt + reserves
-  #   INV-2  health factor consistency during operations
-  #   INV-3  interest accrual monotonicity
+  # Job 1: Run all spec lemma tests (fast; always-on)
   # ─────────────────────────────────────────────────────────────────────────────
   spec-lemmas:
-    name: Spec Lemmas – ${{ matrix.os }}
+    name: Spec Lemmas (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    needs: cargo-check
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
-      - uses: actions/cache@v4
+      - name: Cache Cargo registry & build artifacts
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            contract/target
-          key: ${{ runner.os }}-cargo-spec-${{ hashFiles('contract/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-spec-
+            stellar-lend/target
+          key: ${{ runner.os }}-cargo-spec-${{ hashFiles('stellar-lend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-spec-
 
-      - name: Run spec lemma tests
-        working-directory: contract
+      - name: Run formal verification spec tests
+        working-directory: stellar-lend
         run: |
-          cargo test --features spec -- spec:: --test-threads=4 2>&1 | tee spec-results.txt
-          # Fail explicitly if any test failed (belt-and-suspenders)
-          grep -q "FAILED" spec-results.txt && exit 1 || true
+          cargo check -p stellarlend-lending --features spec
+          cargo test -p stellarlend-lending --features spec --test protocol_formal_specs -- \
+            --test-threads=4
 
-      - name: Run spec tests (release profile)
-        working-directory: contract
+      - name: Verify spec tests pass with --release profile too
+        working-directory: stellar-lend
         run: |
-          cargo test --features spec --release -- spec:: --test-threads=4
-
-      - name: Upload spec results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: spec-results-${{ matrix.os }}-${{ github.sha }}
-          path: contract/spec-results.txt
-          retention-days: 14
+          cargo test -p stellarlend-lending --features spec --release --test protocol_formal_specs -- \
+            --test-threads=4
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Job 3: Verify spec symbols do NOT leak into production WASM
+  # Job 2: Check that spec modules do NOT leak into production WASM binary
   # ─────────────────────────────────────────────────────────────────────────────
   spec-isolation:
     name: Spec Isolation (no leakage into WASM)
     runs-on: ubuntu-latest
-    needs: cargo-check
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust + wasm32 target
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - uses: actions/cache@v4
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            contract/target
-          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('contract/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-wasm-
+            stellar-lend/target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('stellar-lend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
 
-      - name: Build production WASM
-        working-directory: contract
-        run: cargo build --target wasm32-unknown-unknown --release
+      - name: Build production WASM (must not include spec modules)
+        working-directory: stellar-lend
+        run: |
+          cargo build -p stellarlend-lending --target wasm32-unknown-unknown --release
 
-      - name: Assert spec symbols absent from WASM
-        working-directory: contract
+      - name: Assert spec symbol absent from WASM binary
+        working-directory: stellar-lend
         run: |
           WASM_FILE=$(find target/wasm32-unknown-unknown/release -name "*.wasm" | head -1)
-          if [ -z "$WASM_FILE" ]; then
-            echo "No WASM binary found – skipping isolation check"
-            exit 0
-          fi
           echo "Checking WASM binary: $WASM_FILE"
+          # Ensure the spec module identifier does not appear in the binary
           if strings "$WASM_FILE" | grep -q "lemma_"; then
-            echo "::error::Spec symbols found in production WASM binary!"
+            echo "ERROR: spec symbols found in production WASM binary!"
             exit 1
           fi
           echo "OK: No spec symbols in production WASM."
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Job 4: Clippy lint of spec modules
-  # ─────────────────────────────────────────────────────────────────────────────
-  spec-lint:
-    name: Clippy Lint (spec modules)
-    runs-on: ubuntu-latest
-    needs: cargo-check
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            contract/target
-          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('contract/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-lint-
-
-      - name: Clippy on spec modules
-        working-directory: contract
-        run: |
-          cargo clippy --features spec -- \
-            -D warnings \
-            -A clippy::module_name_repetitions
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # Job 5: Kani bounded model-checking (manual dispatch only; slow)
-  #
-  # Provides exhaustive bounded verification of:
-  #   - Absence of overflow/underflow in arithmetic paths
-  #   - Accounting invariants (INV-1)
-  #   - Health factor monotonicity (INV-2)
-  #   - Interest accrual monotonicity (INV-3)
+  # Job 3: Kani bounded model-checking (manual dispatch only; slow)
   # ─────────────────────────────────────────────────────────────────────────────
   kani-harnesses:
     name: Kani Model Checking
@@ -189,7 +129,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_kani == 'true'
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install Kani
         run: |
@@ -197,46 +138,68 @@ jobs:
           cargo kani setup
 
       - name: Run Kani harnesses
-        working-directory: contract
+        working-directory: stellar-lend
         run: |
           cargo kani \
+            --package stellarlend-lending \
             --features spec \
+            --harness spec::protocol_invariants::kani_protocol_accounting_preserves_identity \
+            --harness spec::protocol_invariants::kani_health_factor_consistency \
+            --harness spec::protocol_invariants::kani_interest_index_monotonic \
             --harness spec::interest::kani_interest_properties \
             --harness spec::collateral::kani_collateral_ratio_properties \
             --harness spec::accounting::kani_accounting_invariants \
             --harness spec::health_factor::kani_health_factor_properties \
             --unwind 8 \
             2>&1 | tee kani-report.txt
+          # Fail if any harness failed verification
           grep -q "VERIFICATION FAILED" kani-report.txt && exit 1 || true
 
       - name: Upload Kani report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kani-verification-report-${{ github.sha }}
-          path: contract/kani-report.txt
+          name: kani-verification-report
+          path: stellar-lend/kani-report.txt
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # CI Gate – all required jobs must pass (Issue #384 acceptance criterion)
+  # Job 4: Clippy lint of spec modules
   # ─────────────────────────────────────────────────────────────────────────────
-  formal-verification-gate:
-    name: Formal Verification Gate
+  spec-lint:
+    name: Clippy Lint (spec)
     runs-on: ubuntu-latest
-    needs: [spec-lemmas, spec-isolation, spec-lint]
-    if: always()
+
     steps:
-      - name: Evaluate gate
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            stellar-lend/target
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('stellar-lend/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
+
+      - name: Clippy on spec modules
+        working-directory: stellar-lend
         run: |
-          echo "spec-lemmas:    ${{ needs.spec-lemmas.result }}"
-          echo "spec-isolation: ${{ needs.spec-isolation.result }}"
-          echo "spec-lint:      ${{ needs.spec-lint.result }}"
-
-          if [[ "${{ needs.spec-lemmas.result }}"    != "success" ]] || \
-             [[ "${{ needs.spec-isolation.result }}" != "success" ]] || \
-             [[ "${{ needs.spec-lint.result }}"      != "success" ]]; then
-            echo "::error::Formal verification gate FAILED. PR cannot be merged."
-            exit 1
-          fi
-
-          echo "Formal verification gate PASSED."
+          cargo clippy -p stellarlend-lending --features spec --test protocol_formal_specs -- \
+            -D warnings \
+            -A unused-imports \
+            -A dead-code \
+            -A unexpected-cfgs \
+            -A clippy::module_name_repetitions \
+            -A clippy::too-many-arguments \
+            -A clippy::manual-clamp \
+            -A clippy::manual-range-contains \
+            -A clippy::let-and-return

@@ -342,6 +342,26 @@ pub fn emit_liquidation_fee_collected(e: &Env, event: LiquidationFeeCollectedEve
     event.publish(e);
 }
 
+/// Combo flash-loan + liquidation execution (Issue #661).
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct FlashLoanLiquidationComboEvent {
+    #[topic]
+    pub liquidator: Address,
+    #[topic]
+    pub borrower: Address,
+    pub debt_asset: Address,
+    pub debt_amount: i128,
+    pub collateral_seized: i128,
+    pub flash_fee: i128,
+    pub profit: i128,
+    pub timestamp: u64,
+}
+
+pub fn emit_flash_loan_liquidation_combo(e: &Env, event: FlashLoanLiquidationComboEvent) {
+    event.publish(e);
+}
+
 // ============================================================================
 // Credit Scoring Events (from origin/main)
 // ============================================================================

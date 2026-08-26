@@ -43,19 +43,21 @@
 //! * The oracle contract is trusted; its price return is assumed to be ≥ 0.
 
 #[cfg(any(test, feature = "spec"))]
-pub mod interest;
+pub mod accounting;
 #[cfg(any(test, feature = "spec"))]
 pub mod collateral;
 #[cfg(any(test, feature = "spec"))]
-pub mod accounting;
+pub mod deposit_spec;
 #[cfg(any(test, feature = "spec"))]
 pub mod health_factor;
 #[cfg(any(test, feature = "spec"))]
+pub mod interest;
+#[cfg(any(test, feature = "spec"))]
 pub mod liquidation;
 #[cfg(any(test, feature = "spec"))]
-pub mod rewards;
+pub mod protocol_invariants;
 #[cfg(any(test, feature = "spec"))]
-pub mod deposit_spec;
+pub mod rewards;
 #[cfg(any(test, feature = "spec"))]
 pub mod withdraw_spec;
 #[cfg(any(test, feature = "spec"))]

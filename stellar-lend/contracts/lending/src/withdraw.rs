@@ -1,8 +1,7 @@
 use soroban_sdk::{contracterror, contracttype, Address, Env};
 
 use crate::deposit::{DepositCollateral, DepositDataKey};
-use crate::reentrancy::{ReentrancyGuard, ReentrancyKey};
-use crate::rounding;
+use crate::dust::is_dust_amount;
 
 pub use crate::events::WithdrawEvent;
 
@@ -17,9 +16,7 @@ pub enum WithdrawError {
     InsufficientCollateral = 4,
     InsufficientCollateralRatio = 5,
     Unauthorized = 6,
-    ReentrancyDetected = 7,
-    AmountBelowMinimum = 8,
-    NoDustToSweep = 9,
+    DustAmount = 7,
 }
 
 /// Storage keys for withdraw-related data
@@ -28,16 +25,7 @@ pub enum WithdrawError {
 pub enum WithdrawDataKey {
     Paused,
     MinWithdrawAmount,
-    DustAmount(Address),
 }
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-/// Minimum transaction amount (1 unit of asset)
-const MIN_TRANSACTION_AMOUNT: i128 = 1;
-
-/// Dust threshold (same as minimum transaction amount)
-const DUST_THRESHOLD: i128 = MIN_TRANSACTION_AMOUNT;
 
 /// Minimum collateral ratio in basis points (150%)
 const MIN_COLLATERAL_RATIO_BPS: i128 = 15000;
@@ -68,11 +56,6 @@ pub(crate) fn withdraw_with_auth(
     amount: i128,
     require_auth: bool,
 ) -> Result<i128, WithdrawError> {
-    // CHECKS-EFFECTS-INTERACTIONS PATTERN
-    // 1. CHECKS: Reentrancy guard, authorization, pause state, validation
-    let _guard = ReentrancyGuard::new_with_key(env, ReentrancyKey::WithdrawLock, false)
-        .map_err(|_| WithdrawError::ReentrancyDetected)?;
-
     if require_auth {
         user.require_auth();
     }
@@ -85,14 +68,9 @@ pub(crate) fn withdraw_with_auth(
         return Err(WithdrawError::InvalidAmount);
     }
 
-    // Gas-efficient dust check (early return)
-    if amount < DUST_THRESHOLD {
-        return Err(WithdrawError::AmountBelowMinimum);
-    }
-
     let min_withdraw = get_min_withdraw_amount(env);
     if amount < min_withdraw {
-        return Err(WithdrawError::AmountBelowMinimum);
+        return Err(WithdrawError::InvalidAmount);
     }
 
     let position = get_collateral_position(env, &user, &asset);
@@ -105,10 +83,12 @@ pub(crate) fn withdraw_with_auth(
         .amount
         .checked_sub(amount)
         .ok_or(WithdrawError::Overflow)?;
+    if is_dust_amount(new_amount, min_withdraw) {
+        return Err(WithdrawError::DustAmount);
+    }
 
     validate_collateral_ratio_after_withdraw(env, &user, new_amount)?;
 
-    // 2. EFFECTS: Update state before any external interactions
     let updated_position = DepositCollateral {
         amount: new_amount,
         asset: asset.clone(),
@@ -121,7 +101,6 @@ pub(crate) fn withdraw_with_auth(
     let new_total = total_deposits.checked_sub(amount).unwrap_or(0);
     set_total_deposits(env, new_total);
 
-    // 3. INTERACTIONS: Emit events (no external calls in withdraw)
     WithdrawEvent {
         user,
         asset,
@@ -174,6 +153,10 @@ pub fn initialize_withdraw_settings(
     env: &Env,
     min_withdraw_amount: i128,
 ) -> Result<(), WithdrawError> {
+    if min_withdraw_amount <= 0 {
+        return Err(WithdrawError::InvalidAmount);
+    }
+
     env.storage()
         .persistent()
         .set(&WithdrawDataKey::MinWithdrawAmount, &min_withdraw_amount);
@@ -181,6 +164,44 @@ pub fn initialize_withdraw_settings(
         .persistent()
         .set(&WithdrawDataKey::Paused, &false);
     Ok(())
+}
+
+pub fn sweep_deposit_dust(env: &Env, user: Address, asset: Address) -> Result<i128, WithdrawError> {
+    user.require_auth();
+
+    if is_paused(env) || crate::pause::is_paused(env, crate::pause::PauseType::Withdraw) {
+        return Err(WithdrawError::WithdrawPaused);
+    }
+
+    let min_withdraw = get_min_withdraw_amount(env);
+    let position = get_collateral_position(env, &user, &asset);
+    if !is_dust_amount(position.amount, min_withdraw) {
+        return Err(WithdrawError::DustAmount);
+    }
+
+    let updated_position = DepositCollateral {
+        amount: 0,
+        asset: asset.clone(),
+        last_deposit_time: position.last_deposit_time,
+    };
+    save_collateral_position(env, &user, &updated_position);
+
+    let total_deposits = get_total_deposits(env);
+    let new_total = total_deposits
+        .checked_sub(position.amount)
+        .ok_or(WithdrawError::Overflow)?;
+    set_total_deposits(env, new_total);
+
+    WithdrawEvent {
+        user,
+        asset,
+        amount: position.amount,
+        remaining_balance: 0,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(position.amount)
 }
 
 /// Set withdraw pause state
@@ -226,94 +247,6 @@ fn get_min_withdraw_amount(env: &Env) -> i128 {
         .persistent()
         .get(&WithdrawDataKey::MinWithdrawAmount)
         .unwrap_or(0)
-}
-
-/// Sweep dust amounts from user's withdraw position
-///
-/// # Arguments
-/// * `env` - The contract environment
-/// * `user` - The user's address
-/// * `asset` - The asset address
-///
-/// # Returns
-/// Returns the dust amount swept on success
-pub fn sweep_dust(env: &Env, user: Address, asset: Address) -> Result<i128, WithdrawError> {
-    // CHECKS-EFFECTS-INTERACTIONS PATTERN
-    // 1. CHECKS: Reentrancy guard, authorization
-    let _guard = ReentrancyGuard::new_with_key(env, ReentrancyKey::WithdrawLock, false)
-        .map_err(|_| WithdrawError::ReentrancyDetected)?;
-
-    user.require_auth();
-
-    // Get dust amount
-    let dust_amount = get_dust_amount(env, &user, &asset);
-    if dust_amount < DUST_THRESHOLD {
-        return Err(WithdrawError::NoDustToSweep);
-    }
-
-    let position = get_collateral_position(env, &user, &asset);
-
-    // 2. EFFECTS: Update state before any external interactions
-    // Remove dust from position
-    let new_amount = position
-        .amount
-        .checked_sub(dust_amount)
-        .ok_or(WithdrawError::Overflow)?;
-
-    let updated_position = DepositCollateral {
-        amount: new_amount,
-        asset: asset.clone(),
-        last_deposit_time: position.last_deposit_time,
-    };
-
-    save_collateral_position(env, &user, &updated_position);
-
-    // Clear dust tracking
-    clear_dust(env, &user, &asset);
-
-    // Update total deposits
-    let total_deposits = get_total_deposits(env);
-    let new_total = total_deposits
-        .checked_sub(dust_amount)
-        .ok_or(WithdrawError::Overflow)?;
-    set_total_deposits(env, new_total);
-
-    // 3. INTERACTIONS: Transfer dust to user
-    let token_client = crate::token::Client::new(env, &asset);
-    token_client.transfer(&env.current_contract_address(), &user, &dust_amount);
-
-    Ok(dust_amount)
-}
-
-/// Get dust amount for a user's position
-fn get_dust_amount(env: &Env, user: &Address, asset: &Address) -> i128 {
-    env.storage()
-        .persistent()
-        .get(&WithdrawDataKey::DustAmount(user.clone()))
-        .unwrap_or(0)
-}
-
-/// Set dust amount for a user's position
-fn set_dust_amount(env: &Env, user: &Address, asset: &Address, dust: i128) {
-    env.storage()
-        .persistent()
-        .set(&WithdrawDataKey::DustAmount(user.clone()), &dust);
-}
-
-/// Clear dust tracking for a user's position
-fn clear_dust(env: &Env, user: &Address, asset: &Address) {
-    env.storage()
-        .persistent()
-        .remove(&WithdrawDataKey::DustAmount(user.clone()));
-}
-
-/// Track dust accumulation during operations
-pub fn track_dust(env: &Env, user: &Address, asset: &Address, dust: i128) {
-    if dust > 0 && dust < DUST_THRESHOLD {
-        let current_dust = get_dust_amount(env, user, asset);
-        let new_dust = current_dust.checked_add(dust).unwrap_or(current_dust);
-        set_dust_amount(env, user, asset, new_dust);
-    }
 }
 
 fn is_paused(env: &Env) -> bool {

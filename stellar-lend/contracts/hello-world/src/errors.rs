@@ -18,7 +18,6 @@ use crate::risk_management::RiskManagementError;
 use crate::risk_params::RiskParamsError;
 use crate::treasury::TreasuryError;
 use crate::withdraw::WithdrawError;
-use crate::emergency_withdrawal::EmergencyWithdrawalError;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -212,6 +211,14 @@ impl_from_error!(FlashLoanError, {
     FlashLoanError::Reentrancy => LendingError::Reentrancy,
     FlashLoanError::InvalidCallback => LendingError::InvalidCallback,
     FlashLoanError::CallbackFailed => LendingError::CallbackFailed,
+    FlashLoanError::ExceedsLiquidityCap => LendingError::LimitExceeded,
+    FlashLoanError::ExcessivePriceImpact => LendingError::LimitExceeded,
+    FlashLoanError::ConcurrentLoan => LendingError::Reentrancy,
+    FlashLoanError::PriceManipulationDetected => LendingError::InvalidState,
+    FlashLoanError::Expired => LendingError::InvalidState,
+    FlashLoanError::Unprofitable => LendingError::InvalidState,
+    FlashLoanError::EmptyLegs => LendingError::InvalidAmount,
+    FlashLoanError::TooManyLegs => LendingError::LimitExceeded,
 });
 
 impl_from_error!(ReserveError, {
@@ -278,10 +285,15 @@ impl_from_error!(MevProtectionError, {
     MevProtectionError::FeeCapExceeded => LendingError::FeeCapExceeded,
     MevProtectionError::InvalidAmount => LendingError::InvalidAmount,
     MevProtectionError::InvalidOperation => LendingError::InvalidState,
-    MevProtectionError::DeadlineExpired => LendingError::CommitExpired,
+    MevProtectionError::SlippageExpired => LendingError::CommitExpired,
     MevProtectionError::SlippageExceeded => LendingError::LimitExceeded,
-    MevProtectionError::AuctionWindowOpen => LendingError::InvalidState,
-    MevProtectionError::NoBidsInAuction => LendingError::DataNotFound,
+    MevProtectionError::AuctionNotFound => LendingError::NotFound,
+    MevProtectionError::AuctionNotOpen => LendingError::InvalidState,
+    MevProtectionError::AuctionNotReady => LendingError::CommitNotReady,
+    MevProtectionError::BidNotFound => LendingError::NotFound,
+    MevProtectionError::BidTooLow => LendingError::LimitExceeded,
+    MevProtectionError::PrivateRouteRequired => LendingError::CommitRequired,
+    MevProtectionError::PrivateRouteNotFound => LendingError::NotFound,
 });
 
 impl_from_error!(RepayError, {
@@ -381,17 +393,8 @@ impl From<CrossAssetError> for LendingError {
             CrossAssetError::InvalidPrice => LendingError::PriceUnavailable,
             CrossAssetError::PriceStale => LendingError::PriceUnavailable,
             CrossAssetError::NotAuthorized => LendingError::Unauthorized,
+            CrossAssetError::InvalidCorrelation => LendingError::InvalidParameter,
+            CrossAssetError::VolatilityUnavailable => LendingError::InvalidParameter,
         }
     }
 }
-
-impl_from_error!(EmergencyWithdrawalError, {
-    EmergencyWithdrawalError::NotActive => LendingError::InvalidState,
-    EmergencyWithdrawalError::AlreadyActive => LendingError::AlreadyExists,
-    EmergencyWithdrawalError::WindowNotOpen => LendingError::InvalidState,
-    EmergencyWithdrawalError::NotAuthorized => LendingError::Unauthorized,
-    EmergencyWithdrawalError::InsufficientBalance => LendingError::InsufficientBalance,
-    EmergencyWithdrawalError::ExceedsWithdrawalCap => LendingError::LimitExceeded,
-    EmergencyWithdrawalError::InvalidParameter => LendingError::InvalidParameter,
-    EmergencyWithdrawalError::AlreadyWithdrawn => LendingError::AlreadyExists,
-});

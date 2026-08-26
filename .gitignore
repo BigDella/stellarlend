@@ -45,6 +45,7 @@ lerna-debug.log*
 # Build error logs
 build_errors*.txt
 TEST_FIX.txt
+**/dist/
 
 # IDE / Tools
 .claude/

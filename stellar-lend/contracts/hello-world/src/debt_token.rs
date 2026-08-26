@@ -113,6 +113,14 @@ pub enum DebtTokenError {
     AlreadyTokenized = 10,
     /// Position does not exist for tokenization
     PositionNotFound = 11,
+    /// Token is not currently listed for sale
+    NotListed = 12,
+    /// Token already has an active listing
+    AlreadyListed = 13,
+    /// Caller is not the seller of the listing
+    NotSeller = 14,
+    /// Listing price must be positive
+    InvalidPrice = 15,
 }
 
 /// Storage keys for debt token data
@@ -133,6 +141,56 @@ pub enum DebtTokenDataKey {
     TotalSupply,
     /// Token URI mapping: TokenUri(token_id) -> String
     TokenUri(u64),
+    /// Active fixed-price listing: Listing(token_id) -> DebtTokenListing
+    Listing(u64),
+}
+
+/// A fixed-price secondary-market listing for a debt token (issue #664).
+///
+/// This is intentionally a minimal, honest slice of the "secondary market with
+/// price discovery" the module's doc comment already aspired to: a simple
+/// fixed-price listing/purchase mechanism, NOT the Dutch-auction / order-book /
+/// atomic-clearing system described in issue #664's full scope. That remains a
+/// separate, much larger deliverable — see the PR description for #664-#667.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DebtTokenListing {
+    pub token_id: u64,
+    pub seller: Address,
+    /// Asking price, denominated in `payment_token`.
+    pub price: i128,
+    /// SEP-41 token contract the buyer pays in.
+    pub payment_token: Address,
+    pub listed_at: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenListedEvent {
+    pub token_id: u64,
+    pub seller: Address,
+    pub price: i128,
+    pub payment_token: Address,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenListingCancelledEvent {
+    pub token_id: u64,
+    pub seller: Address,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenSoldEvent {
+    pub token_id: u64,
+    pub seller: Address,
+    pub buyer: Address,
+    pub price: i128,
+    pub payment_token: Address,
+    pub timestamp: u64,
 }
 
 /// Mint a new debt token for a position
@@ -258,7 +316,23 @@ pub fn transfer_debt_token(
     token_id: u64,
 ) -> Result<(), DebtTokenError> {
     from.require_auth();
+    move_debt_token_ownership(env, from, to, token_id)
+}
 
+/// Core ownership move shared by `transfer_debt_token` (direct, `from`-authorized)
+/// and `buy_listed_debt_token` (marketplace purchase, buyer-authorized).
+///
+/// Deliberately does NOT call `require_auth()` on `from` — a marketplace sale is
+/// authorized by the seller's own earlier `list_debt_token` call (which did
+/// require the seller's auth) plus the buyer's auth on the purchase itself, not
+/// by the seller re-signing at sale time. Callers are responsible for ensuring
+/// whatever authorization model applies to their call site before invoking this.
+fn move_debt_token_ownership(
+    env: &Env,
+    from: Address,
+    to: Address,
+    token_id: u64,
+) -> Result<(), DebtTokenError> {
     // Validate inputs
     if to == Address::zero() {
         return Err(DebtTokenError::ZeroAddress);
@@ -320,6 +394,151 @@ pub fn transfer_debt_token(
     .publish(env);
 
     Ok(())
+}
+
+/// List a debt token for sale at a fixed price (issue #664, minimal slice).
+///
+/// The token remains owned by the seller (no escrow) until `buy_listed_debt_token`
+/// succeeds; a paused/blocked transfer still blocks the eventual sale via the same
+/// checks `transfer_debt_token` already enforces.
+///
+/// # Errors
+/// * `Unauthorized` - Caller does not own the token
+/// * `TokenNotFound` - Token ID does not exist
+/// * `AlreadyListed` - Token already has an active listing
+/// * `InvalidPrice` - Price is not positive
+pub fn list_debt_token(
+    env: &Env,
+    seller: Address,
+    token_id: u64,
+    price: i128,
+    payment_token: Address,
+) -> Result<(), DebtTokenError> {
+    seller.require_auth();
+
+    if price <= 0 {
+        return Err(DebtTokenError::InvalidPrice);
+    }
+    get_debt_position(env, token_id).ok_or(DebtTokenError::TokenNotFound)?;
+    let owner_tokens = get_user_debt_tokens(env, &seller);
+    if !owner_tokens.contains(&token_id) {
+        return Err(DebtTokenError::Unauthorized);
+    }
+    let key = DebtTokenDataKey::Listing(token_id);
+    if env.storage().persistent().has(&key) {
+        return Err(DebtTokenError::AlreadyListed);
+    }
+
+    let listing = DebtTokenListing {
+        token_id,
+        seller: seller.clone(),
+        price,
+        payment_token: payment_token.clone(),
+        listed_at: env.ledger().timestamp(),
+    };
+    env.storage().persistent().set(&key, &listing);
+
+    DebtTokenListedEvent {
+        token_id,
+        seller,
+        price,
+        payment_token,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Cancel an active listing. Only the seller may cancel.
+///
+/// # Errors
+/// * `NotListed` - No active listing for this token
+/// * `NotSeller` - Caller is not the listing's seller
+pub fn cancel_listing(env: &Env, seller: Address, token_id: u64) -> Result<(), DebtTokenError> {
+    seller.require_auth();
+
+    let key = DebtTokenDataKey::Listing(token_id);
+    let listing: DebtTokenListing = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(DebtTokenError::NotListed)?;
+    if listing.seller != seller {
+        return Err(DebtTokenError::NotSeller);
+    }
+    env.storage().persistent().remove(&key);
+
+    DebtTokenListingCancelledEvent {
+        token_id,
+        seller,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Buy a listed debt token at its fixed asking price.
+///
+/// Pulls `price` of `payment_token` from the buyer directly to the seller (no
+/// protocol fee skim — trading-fee distribution is out of scope for this minimal
+/// slice, see the module-level note on `DebtTokenListing`), then moves ownership
+/// via the same `move_debt_token_ownership` core `transfer_debt_token` uses, so
+/// pause/block/liquidation checks apply identically to a marketplace purchase
+/// as to a direct transfer — the only difference is which party's auth gates
+/// the call (buyer here, seller for a direct transfer).
+///
+/// # Errors
+/// * `NotListed` - No active listing for this token
+/// * Any error the shared ownership-move core can return (transfer paused, buyer blocked,
+///   position in liquidation, etc.) — the listing is left intact if the
+///   post-payment transfer fails, since Soroban invocations are atomic and the
+///   whole call reverts together with the payment.
+pub fn buy_listed_debt_token(
+    env: &Env,
+    buyer: Address,
+    token_id: u64,
+) -> Result<(), DebtTokenError> {
+    buyer.require_auth();
+
+    let key = DebtTokenDataKey::Listing(token_id);
+    let listing: DebtTokenListing = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(DebtTokenError::NotListed)?;
+
+    let token_client = soroban_sdk::token::Client::new(env, &listing.payment_token);
+    token_client.transfer(&buyer, &listing.seller, &listing.price);
+
+    // Reuses the exact ownership-move logic (and its pause/block/liquidation
+    // safety checks) that transfer_debt_token runs, but WITHOUT re-requiring the
+    // seller's auth — the seller already authorized this sale by creating the
+    // listing (list_debt_token required their auth); the buyer's own auth on
+    // this call is what authorizes the purchase.
+    move_debt_token_ownership(env, listing.seller.clone(), buyer.clone(), token_id)?;
+
+    env.storage().persistent().remove(&key);
+
+    DebtTokenSoldEvent {
+        token_id,
+        seller: listing.seller,
+        buyer,
+        price: listing.price,
+        payment_token: listing.payment_token,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Read-only: fetch the active listing for a token, if any.
+pub fn get_listing(env: &Env, token_id: u64) -> Option<DebtTokenListing> {
+    env.storage()
+        .persistent()
+        .get(&DebtTokenDataKey::Listing(token_id))
 }
 
 /// Burn a debt token (debt repayment)
@@ -550,4 +769,540 @@ fn is_address_blocked(env: &Env, address: &Address) -> bool {
         .persistent()
         .get(&DebtTokenDataKey::BlockedAddress(address.clone()))
         .unwrap_or(false)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Secondary Market: Price Discovery & Order Book  (Issue #787)
+//
+// Extends the minimal fixed-price listing above with:
+//   1. Bid (buy-offer) support — buyers can post offers below the ask.
+//   2. Price discovery — last trade price and a lightweight TWAP are recorded
+//      on every executed sale so off-chain dashboards have on-chain anchors.
+//   3. Marketplace analytics — global counters for volume, trade count, and a
+//      bounded recent-trades log.
+//
+// Design notes
+// ─────────────────────────────────────────────────────────────────────────────
+// • Bids are NOT escrowed on-chain (Soroban has no native hold mechanism without
+//   a separate vault contract). A bid is an intent: when the seller calls
+//   `accept_bid`, the payment is pulled at that moment. This is identical to how
+//   the existing listing/buy flow works and is the standard pattern on Stellar.
+// • TWAP is computed over the last MAX_TWAP_WINDOW trades (up to 20). With fewer
+//   than 2 data points the "TWAP" degrades to the single last-traded price.
+// • All new storage keys are additive; none of the existing keys are changed.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MAX_TWAP_WINDOW: u32 = 20;
+const MAX_RECENT_TRADES: u32 = 100;
+
+// ── New storage-key variants ──────────────────────────────────────────────────
+
+/// Extended storage keys for marketplace price-discovery and analytics.
+#[contracttype]
+#[derive(Clone)]
+pub enum MarketplaceDataKey {
+    /// Active bid on a token: Bid(token_id, bidder) -> DebtTokenBid
+    Bid(u64, Address),
+    /// Ordered list of bidder addresses for a token: BidderList(token_id) -> Vec<Address>
+    BidderList(u64),
+    /// Last traded price for a token: LastTradePrice(token_id) -> TradePrice
+    LastTradePrice(u64),
+    /// Bounded window of recent trade prices for TWAP: TwapWindow(token_id) -> Vec<TradePrice>
+    TwapWindow(u64),
+    /// Global marketplace analytics: MarketplaceAnalytics -> MarketplaceStats
+    MarketplaceAnalytics,
+    /// Bounded log of recent trades across all tokens: RecentTrades -> Vec<TradeRecord>
+    RecentTrades,
+}
+
+// ── Data types ────────────────────────────────────────────────────────────────
+
+/// A buyer's bid (purchase offer) for a listed or unlisted debt token.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebtTokenBid {
+    pub token_id: u64,
+    pub bidder: Address,
+    /// Offered price in `payment_token` units.
+    pub price: i128,
+    /// SEP-41 token the bidder will pay in.
+    pub payment_token: Address,
+    pub created_at: u64,
+    /// Optional expiry; 0 means no expiry.
+    pub expires_at: u64,
+}
+
+/// A single price observation used for TWAP and last-price tracking.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TradePrice {
+    pub price: i128,
+    pub payment_token: Address,
+    pub timestamp: u64,
+}
+
+/// A completed trade record stored in the recent-trades log.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TradeRecord {
+    pub token_id: u64,
+    pub seller: Address,
+    pub buyer: Address,
+    pub price: i128,
+    pub payment_token: Address,
+    pub timestamp: u64,
+}
+
+/// Global marketplace statistics.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarketplaceStats {
+    /// Cumulative number of completed trades.
+    pub total_trades: u64,
+    /// Cumulative number of active/historical listings created.
+    pub total_listings: u64,
+    /// Cumulative number of bids placed.
+    pub total_bids: u64,
+    /// Cumulative number of bid cancellations.
+    pub total_bid_cancellations: u64,
+    /// Timestamp of the last trade.
+    pub last_trade_at: u64,
+}
+
+// ── Events ────────────────────────────────────────────────────────────────────
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenBidPlacedEvent {
+    pub token_id: u64,
+    pub bidder: Address,
+    pub price: i128,
+    pub payment_token: Address,
+    pub expires_at: u64,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenBidCancelledEvent {
+    pub token_id: u64,
+    pub bidder: Address,
+    pub timestamp: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct DebtTokenBidAcceptedEvent {
+    pub token_id: u64,
+    pub seller: Address,
+    pub bidder: Address,
+    pub price: i128,
+    pub payment_token: Address,
+    pub timestamp: u64,
+}
+
+// ── Internal helpers ──────────────────────────────────────────────────────────
+
+fn get_marketplace_stats(env: &Env) -> MarketplaceStats {
+    env.storage()
+        .persistent()
+        .get(&MarketplaceDataKey::MarketplaceAnalytics)
+        .unwrap_or(MarketplaceStats {
+            total_trades: 0,
+            total_listings: 0,
+            total_bids: 0,
+            total_bid_cancellations: 0,
+            last_trade_at: 0,
+        })
+}
+
+fn save_marketplace_stats(env: &Env, stats: &MarketplaceStats) {
+    env.storage()
+        .persistent()
+        .set(&MarketplaceDataKey::MarketplaceAnalytics, stats);
+}
+
+fn record_trade_price(env: &Env, token_id: u64, price: i128, payment_token: Address, now: u64) {
+    let tp = TradePrice { price, payment_token: payment_token.clone(), timestamp: now };
+
+    // Update last-trade price.
+    env.storage()
+        .persistent()
+        .set(&MarketplaceDataKey::LastTradePrice(token_id), &tp);
+
+    // Update TWAP window.
+    let key = MarketplaceDataKey::TwapWindow(token_id);
+    let mut window: Vec<TradePrice> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+    window.push_back(tp.clone());
+    while window.len() > MAX_TWAP_WINDOW {
+        window.remove(0);
+    }
+    env.storage().persistent().set(&key, &window);
+
+    // Append to global recent-trades log.
+    let rt_key = MarketplaceDataKey::RecentTrades;
+    let mut trades: Vec<TradeRecord> = env
+        .storage()
+        .persistent()
+        .get(&rt_key)
+        .unwrap_or_else(|| Vec::new(env));
+    // seller/buyer are unknown here; populated by callers via record_trade().
+    // This function only records price; callers call record_trade() directly.
+    let _ = trades; // unused — full record stored by callers
+}
+
+fn record_trade(
+    env: &Env,
+    token_id: u64,
+    seller: Address,
+    buyer: Address,
+    price: i128,
+    payment_token: Address,
+    now: u64,
+) {
+    // Update last-trade price and TWAP window.
+    record_trade_price(env, token_id, price, payment_token.clone(), now);
+
+    // Append full trade record to global log.
+    let rt_key = MarketplaceDataKey::RecentTrades;
+    let mut trades: Vec<TradeRecord> = env
+        .storage()
+        .persistent()
+        .get(&rt_key)
+        .unwrap_or_else(|| Vec::new(env));
+    trades.push_back(TradeRecord {
+        token_id,
+        seller,
+        buyer,
+        price,
+        payment_token,
+        timestamp: now,
+    });
+    while trades.len() > MAX_RECENT_TRADES {
+        trades.remove(0);
+    }
+    env.storage().persistent().set(&rt_key, &trades);
+
+    // Update global stats.
+    let mut stats = get_marketplace_stats(env);
+    stats.total_trades = stats.total_trades.saturating_add(1);
+    stats.last_trade_at = now;
+    save_marketplace_stats(env, &stats);
+}
+
+fn remove_bid(env: &Env, token_id: u64, bidder: &Address) {
+    env.storage()
+        .persistent()
+        .remove(&MarketplaceDataKey::Bid(token_id, bidder.clone()));
+
+    let list_key = MarketplaceDataKey::BidderList(token_id);
+    let mut list: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&list_key)
+        .unwrap_or_else(|| Vec::new(env));
+    for i in 0..list.len() {
+        if list.get(i).as_ref() == Some(bidder) {
+            list.remove(i);
+            break;
+        }
+    }
+    env.storage().persistent().set(&list_key, &list);
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Place a bid (purchase offer) on a debt token.
+///
+/// The token does NOT need to have an active listing — bids can be placed on any
+/// existing, non-liquidatable token. If `expires_at` is 0 the bid never expires;
+/// otherwise it is only valid while `env.ledger().timestamp() <= expires_at`.
+///
+/// # Errors
+/// * `TokenNotFound` — token does not exist
+/// * `InvalidPrice`  — price is not positive
+/// * `AlreadyListed` — bidder already has an active bid on this token (use cancel first)
+pub fn place_bid(
+    env: &Env,
+    bidder: Address,
+    token_id: u64,
+    price: i128,
+    payment_token: Address,
+    expires_at: u64,
+) -> Result<(), DebtTokenError> {
+    bidder.require_auth();
+
+    if price <= 0 {
+        return Err(DebtTokenError::InvalidPrice);
+    }
+    get_debt_position(env, token_id).ok_or(DebtTokenError::TokenNotFound)?;
+
+    // Prevent duplicate active bid from the same bidder.
+    let bid_key = MarketplaceDataKey::Bid(token_id, bidder.clone());
+    if env.storage().persistent().has(&bid_key) {
+        return Err(DebtTokenError::AlreadyListed); // reuse: "already has an active offer"
+    }
+
+    let now = env.ledger().timestamp();
+    let bid = DebtTokenBid {
+        token_id,
+        bidder: bidder.clone(),
+        price,
+        payment_token: payment_token.clone(),
+        created_at: now,
+        expires_at,
+    };
+    env.storage().persistent().set(&bid_key, &bid);
+
+    // Maintain bidder list for enumeration.
+    let list_key = MarketplaceDataKey::BidderList(token_id);
+    let mut list: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&list_key)
+        .unwrap_or_else(|| Vec::new(env));
+    list.push_back(bidder.clone());
+    env.storage().persistent().set(&list_key, &list);
+
+    // Update global stats.
+    let mut stats = get_marketplace_stats(env);
+    stats.total_bids = stats.total_bids.saturating_add(1);
+    save_marketplace_stats(env, &stats);
+
+    DebtTokenBidPlacedEvent {
+        token_id,
+        bidder,
+        price,
+        payment_token,
+        expires_at,
+        timestamp: now,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Cancel an active bid. Only the bidder may cancel.
+///
+/// # Errors
+/// * `NotListed` — no active bid from caller on this token
+pub fn cancel_bid(env: &Env, bidder: Address, token_id: u64) -> Result<(), DebtTokenError> {
+    bidder.require_auth();
+
+    let bid_key = MarketplaceDataKey::Bid(token_id, bidder.clone());
+    if !env.storage().persistent().has(&bid_key) {
+        return Err(DebtTokenError::NotListed);
+    }
+    remove_bid(env, token_id, &bidder);
+
+    // Update global stats.
+    let mut stats = get_marketplace_stats(env);
+    stats.total_bid_cancellations = stats.total_bid_cancellations.saturating_add(1);
+    save_marketplace_stats(env, &stats);
+
+    DebtTokenBidCancelledEvent {
+        token_id,
+        bidder,
+        timestamp: env.ledger().timestamp(),
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Accept a specific bidder's bid and sell the token to them.
+///
+/// The seller must own the token. Payment is pulled from the bidder to the seller
+/// at acceptance time. Transfer guards (pause, block-list, liquidation) apply.
+///
+/// # Errors
+/// * `Unauthorized`          — caller does not own the token
+/// * `TokenNotFound`         — token does not exist
+/// * `NotListed`             — no active bid from `bidder` on this token
+/// * `InvalidPrice`          — bid has expired (`expires_at` in the past)
+/// * Any error from the ownership-move core (pause/block/liquidation)
+pub fn accept_bid(
+    env: &Env,
+    seller: Address,
+    token_id: u64,
+    bidder: Address,
+) -> Result<(), DebtTokenError> {
+    seller.require_auth();
+
+    // Verify ownership.
+    let owner_tokens = get_user_debt_tokens(env, &seller);
+    if !owner_tokens.contains(&token_id) {
+        return Err(DebtTokenError::Unauthorized);
+    }
+    get_debt_position(env, token_id).ok_or(DebtTokenError::TokenNotFound)?;
+
+    let bid_key = MarketplaceDataKey::Bid(token_id, bidder.clone());
+    let bid: DebtTokenBid = env
+        .storage()
+        .persistent()
+        .get(&bid_key)
+        .ok_or(DebtTokenError::NotListed)?;
+
+    // Check bid expiry.
+    let now = env.ledger().timestamp();
+    if bid.expires_at != 0 && now > bid.expires_at {
+        return Err(DebtTokenError::InvalidPrice); // expired bid
+    }
+
+    // Pull payment from bidder to seller.
+    let token_client = soroban_sdk::token::Client::new(env, &bid.payment_token);
+    token_client.transfer(&bidder, &seller, &bid.price);
+
+    // Move ownership (same checks as direct transfer/marketplace buy).
+    move_debt_token_ownership(env, seller.clone(), bidder.clone(), token_id)?;
+
+    // Clean up bid and any active listing on this token.
+    remove_bid(env, token_id, &bidder);
+    let listing_key = DebtTokenDataKey::Listing(token_id);
+    if env.storage().persistent().has(&listing_key) {
+        env.storage().persistent().remove(&listing_key);
+    }
+
+    // Record trade for price-discovery.
+    record_trade(env, token_id, seller.clone(), bidder.clone(), bid.price, bid.payment_token.clone(), now);
+
+    DebtTokenBidAcceptedEvent {
+        token_id,
+        seller,
+        bidder,
+        price: bid.price,
+        payment_token: bid.payment_token,
+        timestamp: now,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Get a specific bid.
+pub fn get_bid(env: &Env, token_id: u64, bidder: Address) -> Option<DebtTokenBid> {
+    env.storage()
+        .persistent()
+        .get(&MarketplaceDataKey::Bid(token_id, bidder))
+}
+
+/// Get all bidder addresses that have active bids on a token.
+pub fn get_bidders(env: &Env, token_id: u64) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&MarketplaceDataKey::BidderList(token_id))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Get the last traded price for a token (None if never traded via on-chain marketplace).
+pub fn get_last_trade_price(env: &Env, token_id: u64) -> Option<TradePrice> {
+    env.storage()
+        .persistent()
+        .get(&MarketplaceDataKey::LastTradePrice(token_id))
+}
+
+/// Compute the time-weighted average price (TWAP) over the last MAX_TWAP_WINDOW trades.
+///
+/// Returns `None` if no trades have been recorded for this token. With a single
+/// trade the result equals that trade's price.
+pub fn get_twap_price(env: &Env, token_id: u64) -> Option<i128> {
+    let window: Vec<TradePrice> = env
+        .storage()
+        .persistent()
+        .get(&MarketplaceDataKey::TwapWindow(token_id))
+        .unwrap_or_else(|| Vec::new(env));
+
+    if window.is_empty() {
+        return None;
+    }
+
+    // Simple arithmetic mean over price observations.
+    let n = window.len() as i128;
+    let sum: i128 = window.iter().map(|tp| tp.price).fold(0i128, |acc, p| acc.saturating_add(p));
+    Some(sum.checked_div(n).unwrap_or(sum))
+}
+
+/// Get the global marketplace analytics snapshot.
+pub fn get_marketplace_analytics(env: &Env) -> MarketplaceStats {
+    get_marketplace_stats(env)
+}
+
+/// Get the bounded log of recent trades across all tokens (most recent last).
+pub fn get_recent_trades(env: &Env) -> Vec<TradeRecord> {
+    env.storage()
+        .persistent()
+        .get(&MarketplaceDataKey::RecentTrades)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Intercept buy_listed_debt_token to also record a trade for price discovery.
+/// This wraps the existing function by recording the price after a successful buy.
+///
+/// NOTE: This is exposed as `buy_listed_debt_token_with_price_discovery` — the
+/// original `buy_listed_debt_token` is preserved unchanged for backward compat.
+pub fn buy_listed_debt_token_tracked(
+    env: &Env,
+    buyer: Address,
+    token_id: u64,
+) -> Result<(), DebtTokenError> {
+    buyer.require_auth();
+
+    let key = DebtTokenDataKey::Listing(token_id);
+    let listing: DebtTokenListing = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(DebtTokenError::NotListed)?;
+
+    let token_client = soroban_sdk::token::Client::new(env, &listing.payment_token);
+    token_client.transfer(&buyer, &listing.seller, &listing.price);
+
+    move_debt_token_ownership(env, listing.seller.clone(), buyer.clone(), token_id)?;
+
+    env.storage().persistent().remove(&key);
+
+    let now = env.ledger().timestamp();
+
+    // Price discovery record.
+    record_trade(env, token_id, listing.seller.clone(), buyer.clone(), listing.price, listing.payment_token.clone(), now);
+
+    // Update listings counter.
+    let mut stats = get_marketplace_stats(env);
+    stats.total_listings = stats.total_listings.saturating_add(1);
+    save_marketplace_stats(env, &stats);
+
+    DebtTokenSoldEvent {
+        token_id,
+        seller: listing.seller,
+        buyer,
+        price: listing.price,
+        payment_token: listing.payment_token,
+        timestamp: now,
+    }
+    .publish(env);
+
+    Ok(())
+}
+
+/// Intercept list_debt_token to also increment listings counter.
+///
+/// Wraps existing listing creation with marketplace stats bookkeeping.
+pub fn list_debt_token_tracked(
+    env: &Env,
+    seller: Address,
+    token_id: u64,
+    price: i128,
+    payment_token: Address,
+) -> Result<(), DebtTokenError> {
+    list_debt_token(env, seller, token_id, price, payment_token)?;
+
+    let mut stats = get_marketplace_stats(env);
+    stats.total_listings = stats.total_listings.saturating_add(1);
+    save_marketplace_stats(env, &stats);
+
+    Ok(())
 }

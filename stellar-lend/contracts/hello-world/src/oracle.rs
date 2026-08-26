@@ -1480,3 +1480,201 @@ pub fn get_oracle_incident_report(env: &Env, asset: &Address) -> Option<OracleIn
         .persistent()
         .get::<OracleDataKey, OracleIncidentReport>(&key)
 }
+
+// ── Automatic Oracle Health Monitoring (#680) ──────────────────────────────
+
+/// Consecutive failure threshold before auto-triggering circuit breaker
+const AUTO_BREAKER_FAILURE_THRESHOLD: u32 = 3;
+
+/// Storage key extension for tracking consecutive oracle failures per asset
+#[contracttype]
+#[derive(Clone)]
+pub enum OracleHealthKey {
+    /// Number of consecutive price fetch failures for an asset
+    ConsecutiveFailures(Address),
+    /// Timestamp of the last successful price fetch
+    LastSuccess(Address),
+    /// Incident timeline: recent incidents for an asset
+    IncidentTimeline(Address),
+}
+
+/// An entry in the oracle incident timeline
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct IncidentTimelineEntry {
+    pub kind: OracleIncidentKind,
+    pub timestamp: u64,
+    pub resolved: bool,
+    pub resolved_at: u64,
+}
+
+/// Result of an oracle health check
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OracleHealthStatus {
+    pub asset: Address,
+    pub consecutive_failures: u32,
+    pub last_success_timestamp: u64,
+    pub circuit_breaker_open: bool,
+    pub auto_triggered: bool,
+}
+
+/// Monitor oracle health for an asset and auto-trigger circuit breaker if needed.
+///
+/// This function should be called after each failed price fetch. It tracks
+/// consecutive failures and automatically activates the circuit breaker when
+/// the failure threshold is reached.
+///
+/// # Arguments
+/// * `env` - The Soroban environment
+/// * `asset` - The asset address to monitor
+///
+/// # Returns
+/// `OracleHealthStatus` with the current health state
+pub fn monitor_oracle_health(
+    env: &Env,
+    asset: &Address,
+) -> Result<OracleHealthStatus, OracleError> {
+    let failures_key = OracleHealthKey::ConsecutiveFailures(asset.clone());
+    let mut failures: u32 = env
+        .storage()
+        .persistent()
+        .get::<OracleHealthKey, u32>(&failures_key)
+        .unwrap_or(0);
+
+    failures = failures.saturating_add(1);
+    env.storage().persistent().set(&failures_key, &failures);
+
+    let last_success_key = OracleHealthKey::LastSuccess(asset.clone());
+    let last_success: u64 = env
+        .storage()
+        .persistent()
+        .get::<OracleHealthKey, u64>(&last_success_key)
+        .unwrap_or(0);
+
+    let breaker_open = is_breaker_open(env, asset);
+    let mut auto_triggered = false;
+
+    // Auto-trigger circuit breaker if consecutive failures exceed threshold
+    if failures >= AUTO_BREAKER_FAILURE_THRESHOLD && !breaker_open {
+        let config = get_oracle_config(env);
+        let now = env.ledger().timestamp();
+        let open_until = now.saturating_add(config.breaker_cooldown_seconds);
+
+        let state = CircuitBreakerState {
+            open_until,
+            last_safe_price: 0,
+            last_trip_timestamp: now,
+        };
+        set_breaker_state(env, asset, &state);
+
+        write_incident_report(
+            env,
+            asset,
+            OracleIncidentKind::StalePrice,
+            failures as i128,
+            AUTO_BREAKER_FAILURE_THRESHOLD as i128,
+            0,
+            0,
+            open_until,
+        );
+
+        // Append to incident timeline
+        append_incident_timeline(env, asset, OracleIncidentKind::StalePrice);
+
+        auto_triggered = true;
+    }
+
+    Ok(OracleHealthStatus {
+        asset: asset.clone(),
+        consecutive_failures: failures,
+        last_success_timestamp: last_success,
+        circuit_breaker_open: is_breaker_open(env, asset),
+        auto_triggered,
+    })
+}
+
+/// Record a successful oracle fetch, resetting the consecutive failure counter.
+///
+/// Call this after a successful price update to indicate the oracle is healthy.
+pub fn record_oracle_success(env: &Env, asset: &Address) {
+    let failures_key = OracleHealthKey::ConsecutiveFailures(asset.clone());
+    env.storage().persistent().set(&failures_key, &0u32);
+
+    let last_success_key = OracleHealthKey::LastSuccess(asset.clone());
+    env.storage()
+        .persistent()
+        .set(&last_success_key, &env.ledger().timestamp());
+}
+
+/// Append an incident to the asset's incident timeline.
+fn append_incident_timeline(env: &Env, asset: &Address, kind: OracleIncidentKind) {
+    let key = OracleHealthKey::IncidentTimeline(asset.clone());
+    let mut timeline: Vec<IncidentTimelineEntry> = env
+        .storage()
+        .persistent()
+        .get::<OracleHealthKey, Vec<IncidentTimelineEntry>>(&key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    timeline.push_back(IncidentTimelineEntry {
+        kind,
+        timestamp: env.ledger().timestamp(),
+        resolved: false,
+        resolved_at: 0,
+    });
+
+    // Keep only the last 50 entries to bound storage
+    let max_entries: u32 = 50;
+    let mut trimmed: Vec<IncidentTimelineEntry> = Vec::new(env);
+    let start = if timeline.len() as u32 > max_entries {
+        timeline.len() - max_entries as u32
+    } else {
+        0
+    };
+    for i in start..timeline.len() {
+        trimmed.push_back(timeline.get(i).unwrap());
+    }
+
+    env.storage().persistent().set(&key, &trimmed);
+}
+
+/// Mark the latest incident for an asset as resolved.
+pub fn resolve_oracle_incident(env: &Env, asset: &Address) {
+    let key = OracleHealthKey::IncidentTimeline(asset.clone());
+    let mut timeline: Vec<IncidentTimelineEntry> = env
+        .storage()
+        .persistent()
+        .get::<OracleHealthKey, Vec<IncidentTimelineEntry>>(&key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    if timeline.is_empty() {
+        return;
+    }
+
+    let last_idx = timeline.len() - 1;
+    let mut last = timeline.get(last_idx).unwrap();
+    if !last.resolved {
+        last.resolved = true;
+        last.resolved_at = env.ledger().timestamp();
+        timeline.set(last_idx, last);
+        env.storage().persistent().set(&key, &timeline);
+    }
+}
+
+/// Get the incident timeline for an asset.
+pub fn get_incident_timeline(env: &Env, asset: &Address) -> Vec<IncidentTimelineEntry> {
+    let key = OracleHealthKey::IncidentTimeline(asset.clone());
+    env.storage()
+        .persistent()
+        .get::<OracleHealthKey, Vec<IncidentTimelineEntry>>(&key)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Get the number of consecutive failures for an asset.
+pub fn get_consecutive_failures(env: &Env, asset: &Address) -> u32 {
+    let key = OracleHealthKey::ConsecutiveFailures(asset.clone());
+    env.storage()
+        .persistent()
+        .get::<OracleHealthKey, u32>(&key)
+        .unwrap_or(0)
+}

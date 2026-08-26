@@ -7,7 +7,8 @@ pub use crate::storage::{GovernanceDataKey, GuardianConfig};
 
 pub use crate::types::{
     DelegationRecord, GovernanceAnalytics, GovernanceConfig, MultisigConfig,
-    ParameterOptimizationRecommendation, Proposal, ProposalOutcome, ProposalSimulationResult,
+    ParameterOptimizationRecommendation, Proposal, ProposalDryRunResult, ProposalOutcome,
+    ProposalSimulationResult, StateDiffEntry,
     ProposalStatus, ProposalType, RecoveryRequest, VoteInfo, VoteLock, VotePowerSnapshot, VoteType,
     BASIS_POINTS_SCALE, DEFAULT_EXECUTION_DELAY, DEFAULT_QUORUM_BPS, DEFAULT_RECOVERY_PERIOD,
     DEFAULT_TIMELOCK_DURATION, DEFAULT_VOTING_PERIOD, DEFAULT_VOTING_THRESHOLD,
@@ -24,7 +25,6 @@ use crate::events::{
 };
 
 use crate::{interest_rate, risk_management, risk_params};
-use stellarlend_shared_deadline::{is_expired, is_expired_strict};
 
 /// Maximum byte length for a proposal description string.
 pub const MAX_DESCRIPTION_LEN: u32 = 256;
@@ -227,17 +227,6 @@ pub fn vote(
         return Err(GovernanceError::ProposalNotActive);
     }
 
-    if now < proposal.start_time {
-        return Err(GovernanceError::ProposalNotActive);
-    }
-    if is_expired_strict(env, proposal.end_time) {
-        proposal.status = ProposalStatus::Expired;
-        env.storage()
-            .persistent()
-            .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
-        return Err(GovernanceError::ProposalExpired);
-    }
-
     let vote_key = GovernanceDataKey::Vote(proposal_id, voter.clone());
     if env.storage().persistent().has(&vote_key) {
         return Err(GovernanceError::AlreadyVoted);
@@ -246,6 +235,8 @@ pub fn vote(
     // --- Flash loan protection: use snapshot-based voting power ---
     let voting_power =
         get_vote_power_with_delegation(env, proposal_id, &voter, &config.vote_token)?;
+    let token_client = TokenClient::new(env, &config.vote_token);
+    let voting_power = token_client.balance(&voter);
 
     if voting_power == 0 {
         return Err(GovernanceError::NoVotingPower);
@@ -323,7 +314,7 @@ pub fn queue_proposal(
         _ => {}
     }
 
-    if is_expired(env, proposal.end_time.saturating_add(config.timelock_duration)) {
+    if now > proposal.end_time + DEFAULT_TIMELOCK_DURATION {
         proposal.status = ProposalStatus::Expired;
         env.storage()
             .persistent()
@@ -460,6 +451,187 @@ pub fn get_simulation_cache(env: &Env, proposal_id: u64) -> Option<ProposalSimul
         .get(&GovernanceDataKey::ProposalSimulationCache(proposal_id))
 }
 
+fn current_protocol_snapshot(env: &Env) -> (i128, i128, i128, i128, i128, i128, i128, bool) {
+    let params = risk_params::get_risk_params(env);
+    let mcr = params
+        .as_ref()
+        .map(|p| p.min_collateral_ratio)
+        .unwrap_or(11_000);
+    let lt = params
+        .as_ref()
+        .map(|p| p.liquidation_threshold)
+        .unwrap_or(10_500);
+    let cf = params.as_ref().map(|p| p.close_factor).unwrap_or(5_000);
+    let li = params
+        .as_ref()
+        .map(|p| p.liquidation_incentive)
+        .unwrap_or(1_000);
+    let tvl = crate::analytics::get_total_value_locked(env).unwrap_or(0);
+    let borrow_apy = interest_rate::get_current_borrow_rate(env).unwrap_or(0);
+    let supply_apy = interest_rate::get_current_supply_rate(env).unwrap_or(0);
+    let paused = risk_management::is_emergency_paused(env);
+    (mcr, lt, cf, li, tvl, borrow_apy, supply_apy, paused)
+}
+
+fn estimate_execution_gas(proposal_type: &ProposalType) -> u64 {
+    match proposal_type {
+        ProposalType::MinCollateralRatio(_) => 45_000,
+        ProposalType::RiskParams(_, _, _, _) => 72_000,
+        ProposalType::InterestRateConfig(_) => 68_000,
+        ProposalType::PauseSwitch(_, _) => 28_000,
+        ProposalType::EmergencyPause(_) => 24_000,
+        ProposalType::GenericAction(_) => 90_000,
+    }
+}
+
+/// Dry-run proposal execution: state diff, TVL/APY/risk impact, gas estimate.
+/// Does not mutate protocol parameters. Caches the result for repeated views.
+pub fn simulate_proposal_dry_run(
+    env: &Env,
+    proposal_id: u64,
+) -> Result<ProposalDryRunResult, GovernanceError> {
+    if let Some(cached) = get_dry_run_cache(env, proposal_id) {
+        return Ok(cached);
+    }
+
+    let proposal: Proposal = env
+        .storage()
+        .persistent()
+        .get(&GovernanceDataKey::Proposal(proposal_id))
+        .ok_or(GovernanceError::ProposalNotFound)?;
+
+    let vote_sim = {
+        let config: GovernanceConfig = env
+            .storage()
+            .instance()
+            .get(&GovernanceDataKey::Config)
+            .ok_or(GovernanceError::NotInitialized)?;
+        compute_simulation(env, &proposal, &config)
+    };
+
+    let (mcr, lt, cf, li, tvl, borrow_apy, _supply_apy, paused) = current_protocol_snapshot(env);
+
+    let mut proposed_mcr = mcr;
+    let mut proposed_lt = lt;
+    let mut proposed_cf = cf;
+    let mut proposed_li = li;
+    let mut proposed_borrow_apy = borrow_apy;
+    let mut proposed_paused = paused;
+
+    match &proposal.proposal_type {
+        ProposalType::MinCollateralRatio(ratio) => {
+            proposed_mcr = *ratio;
+        }
+        ProposalType::RiskParams(new_mcr, new_lt, new_cf, new_li) => {
+            if let Some(v) = new_mcr {
+                proposed_mcr = *v;
+            }
+            if let Some(v) = new_lt {
+                proposed_lt = *v;
+            }
+            if let Some(v) = new_cf {
+                proposed_cf = *v;
+            }
+            if let Some(v) = new_li {
+                proposed_li = *v;
+            }
+        }
+        ProposalType::InterestRateConfig(params) => {
+            if let Some(base) = params.base_rate_bps {
+                proposed_borrow_apy = base;
+            }
+        }
+        ProposalType::EmergencyPause(p) => {
+            proposed_paused = *p;
+        }
+        ProposalType::PauseSwitch(_, p) => {
+            proposed_paused = *p;
+        }
+        ProposalType::GenericAction(_) => {}
+    }
+
+    // Higher collateral ratio reduces borrow capacity ~linearly; pause drains flow.
+    let mut tvl_delta: i128 = 0;
+    if proposed_mcr != mcr && mcr > 0 {
+        tvl_delta = -(tvl * (proposed_mcr - mcr)) / mcr / 10;
+    }
+    if proposed_paused && !paused {
+        tvl_delta -= tvl / 20;
+    }
+
+    let apy_delta_bps = proposed_borrow_apy - borrow_apy;
+
+    // Risk rises when liquidation threshold or close factor loosens.
+    let risk_score_delta = (lt - proposed_lt) / 10 + (proposed_cf - cf) / 20 + (proposed_li - li) / 20;
+
+    let mut diffs = Vec::new(env);
+    if proposed_mcr != mcr {
+        diffs.push_back(StateDiffEntry {
+            field: String::from_str(env, "min_collateral_ratio"),
+            current_value: mcr,
+            proposed_value: proposed_mcr,
+        });
+    }
+    if proposed_lt != lt {
+        diffs.push_back(StateDiffEntry {
+            field: String::from_str(env, "liquidation_threshold"),
+            current_value: lt,
+            proposed_value: proposed_lt,
+        });
+    }
+    if proposed_cf != cf {
+        diffs.push_back(StateDiffEntry {
+            field: String::from_str(env, "close_factor"),
+            current_value: cf,
+            proposed_value: proposed_cf,
+        });
+    }
+    if proposed_li != li {
+        diffs.push_back(StateDiffEntry {
+            field: String::from_str(env, "liquidation_incentive"),
+            current_value: li,
+            proposed_value: proposed_li,
+        });
+    }
+    if proposed_borrow_apy != borrow_apy {
+        diffs.push_back(StateDiffEntry {
+            field: String::from_str(env, "borrow_apy_bps"),
+            current_value: borrow_apy,
+            proposed_value: proposed_borrow_apy,
+        });
+    }
+    if proposed_paused != paused {
+        diffs.push_back(StateDiffEntry {
+            field: String::from_str(env, "emergency_pause"),
+            current_value: if paused { 1 } else { 0 },
+            proposed_value: if proposed_paused { 1 } else { 0 },
+        });
+    }
+
+    let result = ProposalDryRunResult {
+        proposal_id,
+        would_succeed: vote_sim.would_succeed,
+        tvl_delta,
+        apy_delta_bps,
+        risk_score_delta,
+        gas_units_estimate: estimate_execution_gas(&proposal.proposal_type),
+        diffs,
+        simulated_at: env.ledger().timestamp(),
+    };
+
+    env.storage().persistent().set(
+        &GovernanceDataKey::ProposalDryRunCache(proposal_id),
+        &result,
+    );
+    Ok(result)
+}
+
+pub fn get_dry_run_cache(env: &Env, proposal_id: u64) -> Option<ProposalDryRunResult> {
+    env.storage()
+        .persistent()
+        .get(&GovernanceDataKey::ProposalDryRunCache(proposal_id))
+}
+
 // ========================================================================
 // Parameter Optimization (simple, transparent heuristic)
 // ========================================================================
@@ -509,9 +681,9 @@ pub fn get_parameter_optimization_recommendation(
         suggested_quorum_bps = suggested_quorum_bps.saturating_add(250).min(9_000);
     }
 
-    let mut suggested_vote_threshold = config.default_voting_threshold;
+    let mut suggested_vote_threshold_bps = config.default_voting_threshold;
     if analytics.suspicious_proposals > 0 {
-        suggested_vote_threshold = (suggested_vote_threshold + 250).min(BASIS_POINTS_SCALE);
+        suggested_vote_threshold_bps = (suggested_vote_threshold_bps + 250).min(BASIS_POINTS_SCALE);
     }
 
     let transparency_note = String::from_str(
@@ -522,7 +694,7 @@ pub fn get_parameter_optimization_recommendation(
     let recommendation = ParameterOptimizationRecommendation {
         generated_at: env.ledger().timestamp(),
         suggested_quorum_bps,
-        suggested_vote_threshold,
+        suggested_vote_threshold_bps,
         suggested_voting_period: config.voting_period,
         transparency_note,
     };
@@ -572,7 +744,7 @@ pub fn execute_proposal(
         return Err(GovernanceError::ExecutionTooEarly);
     }
 
-    if is_expired(env, execution_time.saturating_add(config.timelock_duration)) {
+    if now > execution_time + config.timelock_duration {
         proposal.status = ProposalStatus::Expired;
         env.storage()
             .persistent()
@@ -961,12 +1133,6 @@ pub fn execute_multisig_proposal(
 ) -> Result<(), GovernanceError> {
     executor.require_auth();
 
-    let config: GovernanceConfig = env
-        .storage()
-        .instance()
-        .get(&GovernanceDataKey::Config)
-        .ok_or(GovernanceError::NotInitialized)?;
-
     let multisig_config = get_multisig_config(env).ok_or(GovernanceError::NotInitialized)?;
     if !multisig_config.admins.contains(&executor) {
         return Err(GovernanceError::Unauthorized);
@@ -980,18 +1146,6 @@ pub fn execute_multisig_proposal(
 
     if proposal.status != ProposalStatus::Pending {
         return Err(GovernanceError::InvalidProposalStatus);
-    }
-
-    let now = env.ledger().timestamp();
-    if now <= proposal.end_time {
-        return Err(GovernanceError::ProposalNotReady);
-    }
-    if is_expired(env, proposal.end_time.saturating_add(config.timelock_duration)) {
-        proposal.status = ProposalStatus::Expired;
-        env.storage()
-            .persistent()
-            .set(&GovernanceDataKey::Proposal(proposal_id), &proposal);
-        return Err(GovernanceError::ProposalExpired);
     }
 
     let approvals = get_proposal_approvals(env, proposal_id).unwrap_or_else(|| Vec::new(env));

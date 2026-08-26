@@ -108,3 +108,91 @@ export interface RateHistoryQuery {
   to?: string;
   granularity?: RateGranularity;
 }
+
+// ─── Real-time Dashboard types  (Issue #795) ─────────────────────────────────
+
+/** A single protocol-wide real-time metrics snapshot. */
+export interface ProtocolMetricsSnapshot {
+  totalValueLocked: string;
+  totalDeposits: string;
+  totalBorrows: string;
+  utilizationRateBps: number;
+  averageBorrowRateBps: number;
+  totalUsers: number;
+  totalTransactions: number;
+  timestamp: string;
+}
+
+/** Per-user metrics for the dashboard. */
+export interface UserMetricsDashboard {
+  userAddress: string;
+  collateral: string;
+  debt: string;
+  healthFactor: number;
+  totalDeposits: string;
+  totalBorrows: string;
+  totalWithdrawals: string;
+  totalRepayments: string;
+  activityScore: number;
+  riskLevel: number;
+  transactionCount: number;
+}
+
+/** A single entry in the real-time activity feed. */
+export interface ActivityFeedEntry {
+  userAddress: string;
+  activityType: string;
+  amount: string;
+  asset: string | null;
+  timestamp: string;
+}
+
+/** Historical metrics snapshot for trend charts. */
+export interface MetricsHistoryPoint {
+  timestamp: string;
+  totalValueLocked: string;
+  utilizationRateBps: number;
+  averageBorrowRateBps: number;
+}
+
+/** TVL forecast data point. */
+export interface TvlForecastPoint {
+  periodIndex: number;
+  forecastedTvl: string;
+  periodsAhead: number;
+}
+
+/** A configured metric alert threshold. */
+export interface MetricAlertConfig {
+  metric: 'tvl' | 'utilization' | 'avg_rate';
+  threshold: string;
+}
+
+/** A triggered alert record. */
+export interface TriggeredAlertRecord {
+  metric: string;
+  value: string;
+  threshold: string;
+  timestamp: string;
+}
+
+/** Collateral ratio snapshot for an asset. */
+export interface CollateralRatioSnapshot {
+  asset: string;
+  currentRatioBps: number;
+  requiredRatioBps: number;
+  healthFactor: number;
+  riskLevel: 'safe' | 'warning' | 'danger' | 'critical';
+  collateralValue: string;
+  debtValue: string;
+  timestamp: string;
+}
+
+/** Dashboard aggregated view — all panels in one response. */
+export interface DashboardView {
+  protocol: ProtocolMetricsSnapshot;
+  activityFeed: ActivityFeedEntry[];
+  collateralRatios: CollateralRatioSnapshot[];
+  alerts: TriggeredAlertRecord[];
+  generatedAt: string;
+}

@@ -9,7 +9,9 @@ function sanitizeObject(value: unknown): unknown {
     if (trimmed.length > MAX_STRING_LENGTH) {
       throw new ValidationError(`Input exceeds maximum length (${MAX_STRING_LENGTH})`);
     }
-    return trimmed.replace(/[<>"'`]/g, '');
+    // Preserve quotes so structured payloads like JSON/CSV imports and signed blobs
+    // are not corrupted while still removing raw angle brackets.
+    return trimmed.replace(/[<>]/g, '');
   }
 
   if (Array.isArray(value)) {

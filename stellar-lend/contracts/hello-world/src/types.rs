@@ -154,12 +154,34 @@ pub struct ProposalSimulationResult {
     pub note: String,
 }
 
+/// Dry-run execution preview with state diff and impact metrics (Issue #662).
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct StateDiffEntry {
+    pub field: String,
+    pub current_value: i128,
+    pub proposed_value: i128,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct ProposalDryRunResult {
+    pub proposal_id: u64,
+    pub would_succeed: bool,
+    pub tvl_delta: i128,
+    pub apy_delta_bps: i128,
+    pub risk_score_delta: i128,
+    pub gas_units_estimate: u64,
+    pub diffs: Vec<StateDiffEntry>,
+    pub simulated_at: u64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[contracttype]
 pub struct ParameterOptimizationRecommendation {
     pub generated_at: u64,
     pub suggested_quorum_bps: u32,
-    pub suggested_vote_threshold: i128,
+    pub suggested_vote_threshold_bps: i128,
     pub suggested_voting_period: u64,
     pub transparency_note: String,
 }
@@ -244,38 +266,3 @@ pub const DELEGATION_DEADLINE: u64 = 24 * 60 * 60; // 24 hours
 pub const MAX_DELEGATION_DEPTH: u32 = 3;
 pub const PROPOSAL_RATE_LIMIT: u32 = 5;
 pub const PROPOSAL_RATE_WINDOW: u64 = 24 * 60 * 60; // 24 hours
-
-// ========================================================================
-// Emergency Withdrawal Types
-// ========================================================================
-
-#[derive(Clone, Debug, PartialEq)]
-#[contracttype]
-pub enum EmergencyTrigger {
-    GovernanceVote,
-    OracleFailure,
-    AdminEmergency,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[contracttype]
-pub struct EmergencyState {
-    pub is_active: bool,
-    pub trigger: EmergencyTrigger,
-    pub started_at: u64,
-    pub window_opens_at: u64,
-    pub window_closes_at: u64,
-    pub withdrawal_cap_bps: i128,
-    pub total_withdrawn_this_window: i128,
-    pub bad_debt: i128,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-#[contracttype]
-pub struct EmergencyWithdrawal {
-    pub user: Address,
-    pub asset: Option<Address>,
-    pub amount: i128,
-    pub withdrawn_at: u64,
-    pub loss_share_bps: i128,
-}

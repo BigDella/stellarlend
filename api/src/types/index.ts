@@ -44,20 +44,6 @@ export interface SubmitRequest {
   assetAddress?: string;
 }
 
-export interface RelayDelegatedRequest {
-  delegatorAddress: string;
-  nonce: string;
-  deadline: string;
-  callsXdr: string;
-}
-
-export interface RelayDelegatedResponse {
-  delegateAddress: string;
-  transactionHash?: string;
-  status: 'pending' | 'success' | 'failed';
-  error?: string;
-}
-
 export interface TransactionResponse {
   success: boolean;
   transactionHash?: string;
@@ -138,49 +124,12 @@ export interface WsPingMessage {
   type: 'ping';
 }
 
-export interface WsAnalyticsSubscribeMessage {
-  type: 'subscribe_analytics';
-  channels: ('apy' | 'utilization' | 'revenue')[];
-}
-
-export interface WsAnalyticsUnsubscribeMessage {
-  type: 'unsubscribe_analytics';
-  channels: ('apy' | 'utilization' | 'revenue')[];
-}
-
-export interface WsMarketDataSubscribeMessage {
-  type: 'subscribe_market_data';
-  channels: string[];
-}
-
-export interface WsMarketDataUnsubscribeMessage {
-  type: 'unsubscribe_market_data';
-  channels: string[];
-}
-
-export interface WsGetReconnectTokenMessage {
-  type: 'get_reconnect_token';
-}
-
-export type ClientMessage =
-  | WsSubscribeMessage
-  | WsUnsubscribeMessage
-  | WsPingMessage
-  | WsAnalyticsSubscribeMessage
-  | WsAnalyticsUnsubscribeMessage
-  | WsMarketDataSubscribeMessage
-  | WsMarketDataUnsubscribeMessage
-  | WsGetReconnectTokenMessage;
+export type ClientMessage = WsSubscribeMessage | WsUnsubscribeMessage | WsPingMessage;
 
 export type ServerMessage =
   | { type: 'price_update'; asset: string; price: number; timestamp: number }
   | { type: 'subscribed'; assets: string[] }
   | { type: 'unsubscribed'; assets: string[] }
-  | { type: 'subscribed_analytics'; channels: string[] }
-  | { type: 'unsubscribed_analytics'; channels: string[] }
-  | { type: 'subscribed_market_data'; channels: string[] }
-  | { type: 'unsubscribed_market_data'; channels: string[] }
-  | { type: 'reconnect_token'; token: string }
   | { type: 'pong' }
   | { type: 'error'; message: string };
 
@@ -197,8 +146,8 @@ export interface TransactionHistoryItem {
   memo?: string;
 }
 
-import { PaginatedResponse, PaginationParams } from './pagination';
 export * from './subscriptions';
+import { PaginatedResponse, PaginationParams } from './pagination';
 
 export type TransactionHistoryResponse = PaginatedResponse<TransactionHistoryItem>;
 

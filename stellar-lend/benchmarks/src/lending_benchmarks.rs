@@ -14,6 +14,7 @@ use crate::framework::{
 use soroban_sdk::{contract, contractimpl, testutils::Address as _, token, Address, Bytes, Env};
 use stellarlend_lending::{
     interest::{advance_index, interest_for, INDEX_SCALE},
+    InterestRateConfigUpdate, InterestRateModelKind,
     liquidation::{plan_liquidation, PositionSnapshot},
     LendingContract, LendingContractClient, PauseType,
 };
@@ -73,6 +74,10 @@ fn run_all(config: &RunConfig) -> Vec<BenchmarkResult> {
         bench_set_pause(config),
         bench_set_flash_loan_fee(config),
         bench_set_liquidation_threshold(config),
+        bench_update_interest_rate_model_linear(config),
+        bench_update_interest_rate_model_kink(config),
+        bench_update_interest_rate_model_jump(config),
+        bench_update_interest_rate_model_exponential(config),
         bench_deposit_multiple_assets_storage(config),
     ]
 }
@@ -159,6 +164,19 @@ fn bench_initialize_deposit_settings(config: &RunConfig) -> BenchmarkResult {
         get_budget(config, op),
         vec!["admin".into(), "settings".into()],
     )
+}
+
+fn interest_model_update(model: InterestRateModelKind) -> InterestRateConfigUpdate {
+    InterestRateConfigUpdate {
+        model: Some(model as u32),
+        base_rate_bps: None,
+        kink_utilization_bps: None,
+        slope_bps: None,
+        jump_slope_bps: None,
+        rate_floor_bps: None,
+        rate_ceiling_bps: None,
+        spread_bps: None,
+    }
 }
 
 // ─── Deposit ──────────────────────────────────────────────────────────────────
@@ -826,6 +844,69 @@ fn bench_set_liquidation_threshold(config: &RunConfig) -> BenchmarkResult {
 // ─── Storage pattern benchmarks ───────────────────────────────────────────────
 
 /// Benchmark storage cost growth with multiple assets deposited
+fn bench_update_interest_rate_model(
+    config: &RunConfig,
+    model: InterestRateModelKind,
+    op: &'static str,
+) -> BenchmarkResult {
+    let env = fresh_env();
+    let (client, admin) = setup_admin_initialized(&env);
+    let update = interest_model_update(model);
+
+    let (insns, mem) = measure_instructions(&env, || {
+        client.update_interest_rate_model(&admin, &update);
+    });
+
+    BenchmarkResult::new(
+        op,
+        CONTRACT,
+        "Switch configurable interest rate model",
+        insns,
+        mem,
+        1,
+        1,
+        false,
+        get_budget(config, op),
+        vec![
+            "admin".into(),
+            "interest_rate".into(),
+            "model_switch".into(),
+        ],
+    )
+}
+
+fn bench_update_interest_rate_model_linear(config: &RunConfig) -> BenchmarkResult {
+    bench_update_interest_rate_model(
+        config,
+        InterestRateModelKind::Linear,
+        "lending::interest_rate_model_linear",
+    )
+}
+
+fn bench_update_interest_rate_model_kink(config: &RunConfig) -> BenchmarkResult {
+    bench_update_interest_rate_model(
+        config,
+        InterestRateModelKind::Kink,
+        "lending::interest_rate_model_kink",
+    )
+}
+
+fn bench_update_interest_rate_model_jump(config: &RunConfig) -> BenchmarkResult {
+    bench_update_interest_rate_model(
+        config,
+        InterestRateModelKind::Jump,
+        "lending::interest_rate_model_jump",
+    )
+}
+
+fn bench_update_interest_rate_model_exponential(config: &RunConfig) -> BenchmarkResult {
+    bench_update_interest_rate_model(
+        config,
+        InterestRateModelKind::Exponential,
+        "lending::interest_rate_model_exponential",
+    )
+}
+
 fn bench_deposit_multiple_assets_storage(config: &RunConfig) -> BenchmarkResult {
     let op = "lending::deposit_multi_asset_storage";
     let env = fresh_env();

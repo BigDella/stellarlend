@@ -32,10 +32,18 @@ fn local_health_factor(
     liq_threshold_bps: i128,
     oracle_present: bool,
 ) -> Option<i128> {
-    if debt_value <= 0 { return Some(i128::MAX); } // no debt = max healthy
-    if !oracle_present { return None; }
-    let weighted = collateral_value.checked_mul(liq_threshold_bps)?.checked_div(BPS_DIVISOR)?;
-    let hf = weighted.checked_mul(HEALTH_FACTOR_SCALE)?.checked_div(debt_value)?;
+    if debt_value <= 0 {
+        return Some(i128::MAX);
+    } // no debt = max healthy
+    if !oracle_present {
+        return None;
+    }
+    let weighted = collateral_value
+        .checked_mul(liq_threshold_bps)?
+        .checked_div(BPS_DIVISOR)?;
+    let hf = weighted
+        .checked_mul(HEALTH_FACTOR_SCALE)?
+        .checked_div(debt_value)?;
     Some(hf)
 }
 
@@ -58,7 +66,7 @@ pub fn reference_max_liquidatable(
         oracle_present,
     );
     match hf {
-        None | Some(0) => 0, // oracle absent or zero HF
+        None | Some(0) => 0,                      // oracle absent or zero HF
         Some(h) if h >= HEALTH_FACTOR_SCALE => 0, // healthy
         Some(_) => {
             // Liquidatable: apply close factor
@@ -75,8 +83,12 @@ pub fn reference_max_liquidatable(
 fn lemma_l01_healthy_position_returns_zero() {
     // Collateral far above threshold
     let result = reference_max_liquidatable(
-        100_000, 2_000_000, 1_000_000,
-        DEFAULT_CLOSE_FACTOR_BPS, DEFAULT_LIQ_THRESHOLD_BPS, true,
+        100_000,
+        2_000_000,
+        1_000_000,
+        DEFAULT_CLOSE_FACTOR_BPS,
+        DEFAULT_LIQ_THRESHOLD_BPS,
+        true,
     );
     assert_eq!(result, 0, "L-01: healthy position should return 0");
 }
@@ -84,7 +96,14 @@ fn lemma_l01_healthy_position_returns_zero() {
 /// **L-02**: No debt → 0.
 #[test]
 fn lemma_l02_no_debt_returns_zero() {
-    let result = reference_max_liquidatable(0, 0, 0, DEFAULT_CLOSE_FACTOR_BPS, DEFAULT_LIQ_THRESHOLD_BPS, true);
+    let result = reference_max_liquidatable(
+        0,
+        0,
+        0,
+        DEFAULT_CLOSE_FACTOR_BPS,
+        DEFAULT_LIQ_THRESHOLD_BPS,
+        true,
+    );
     assert_eq!(result, 0, "L-02");
 }
 
@@ -92,8 +111,12 @@ fn lemma_l02_no_debt_returns_zero() {
 #[test]
 fn lemma_l03_no_oracle_returns_zero() {
     let result = reference_max_liquidatable(
-        100_000, 50_000, 100_000,
-        DEFAULT_CLOSE_FACTOR_BPS, DEFAULT_LIQ_THRESHOLD_BPS, false,
+        100_000,
+        50_000,
+        100_000,
+        DEFAULT_CLOSE_FACTOR_BPS,
+        DEFAULT_LIQ_THRESHOLD_BPS,
+        false,
     );
     assert_eq!(result, 0, "L-03: no oracle should return 0");
 }
@@ -104,10 +127,17 @@ fn lemma_l04_liquidatable_does_not_exceed_total_debt() {
     // Severely undercollateralised position
     let total_debt = 1_000_000i128;
     let result = reference_max_liquidatable(
-        total_debt, 100_000, 1_000_000,
-        DEFAULT_CLOSE_FACTOR_BPS, DEFAULT_LIQ_THRESHOLD_BPS, true,
+        total_debt,
+        100_000,
+        1_000_000,
+        DEFAULT_CLOSE_FACTOR_BPS,
+        DEFAULT_LIQ_THRESHOLD_BPS,
+        true,
     );
-    assert!(result <= total_debt, "L-04: liquidatable={result} > total_debt={total_debt}");
+    assert!(
+        result <= total_debt,
+        "L-04: liquidatable={result} > total_debt={total_debt}"
+    );
 }
 
 /// **L-05**: Liquidatable amount equals total_debt * close_factor / 10_000.
@@ -123,11 +153,18 @@ fn lemma_l05_formula_correctness() {
     let cv = 600_000i128;
     let dv = total_debt;
     let result = reference_max_liquidatable(
-        total_debt, cv, dv,
-        DEFAULT_CLOSE_FACTOR_BPS, DEFAULT_LIQ_THRESHOLD_BPS, true,
+        total_debt,
+        cv,
+        dv,
+        DEFAULT_CLOSE_FACTOR_BPS,
+        DEFAULT_LIQ_THRESHOLD_BPS,
+        true,
     );
     let expected = total_debt * DEFAULT_CLOSE_FACTOR_BPS / BPS_DIVISOR;
-    assert_eq!(result, expected, "L-05: formula mismatch, got={result}, expected={expected}");
+    assert_eq!(
+        result, expected,
+        "L-05: formula mismatch, got={result}, expected={expected}"
+    );
 }
 
 /// **L-06**: No overflow for i128::MAX / 2 total debt.
@@ -135,11 +172,16 @@ fn lemma_l05_formula_correctness() {
 fn lemma_l06_no_overflow_on_large_debt() {
     let total_debt = i128::MAX / 2;
     let result = reference_max_liquidatable(
-        total_debt, 0, total_debt,
-        DEFAULT_CLOSE_FACTOR_BPS, DEFAULT_LIQ_THRESHOLD_BPS, true,
+        total_debt,
+        0,
+        total_debt,
+        DEFAULT_CLOSE_FACTOR_BPS,
+        DEFAULT_LIQ_THRESHOLD_BPS,
+        true,
     );
     // Should not panic; result may be 0 if intermediate overflow triggers the unwrap_or path
-    let expected = (total_debt as i128).checked_mul(DEFAULT_CLOSE_FACTOR_BPS)
+    let expected = (total_debt as i128)
+        .checked_mul(DEFAULT_CLOSE_FACTOR_BPS)
         .map(|v| v / BPS_DIVISOR)
         .unwrap_or(0);
     assert_eq!(result, expected, "L-06: overflow path mismatch");

@@ -62,6 +62,7 @@ pub enum GovernanceDataKey {
     GovernanceAnalytics,
     // Caches
     ProposalSimulationCache(u64),
+    ProposalDryRunCache(u64),
     ParameterOptimizationCache,
     // Rate limiting
     ProposalWindowStart(Address),
@@ -71,6 +72,11 @@ pub enum GovernanceDataKey {
     NextTimelockId,
     TimelockOperation(u64),
     TimelockQueue,
+    /// #674 — per-action-type timelock delay override: ActionTypeDelay(action_type_id) -> u64
+    ActionTypeDelay(u32),
+    /// #674 — guardian approvals collected for an emergency override of a queued
+    /// timelock operation: TimelockEmergencyApprovals(operation_id) -> Vec<Address>
+    TimelockEmergencyApprovals(u64),
 }
 
 // ─── General data keys (used by credit score and other modules) ───────────────

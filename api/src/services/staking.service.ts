@@ -6,6 +6,14 @@ import type {
   DelegateRequest,
   RevokeDelegationRequest,
   StakingRewardConfig,
+  YieldFarmingStrategy,
+  YieldStrategyPerformance,
+  YieldOptimizationRecommendation,
+  CreateYieldStrategyRequest,
+  ActivateYieldStrategyRequest,
+  CompoundStrategyRequest,
+  PoolAllocation,
+  StrategyPerformanceSnapshot,
 } from '../types/staking';
 import logger from '../utils/logger';
 
@@ -20,6 +28,38 @@ const LOCKUP_OPTIONS = [0, 30, 90, 180, 365];
 
 // In-memory store. Replace with DB/Redis in production.
 const positions = new Map<string, StakingPosition>();
+
+// ─── Yield Farming in-memory stores ──────────────────────────────────────────
+
+/** All persisted strategies keyed by strategyId */
+const yieldStrategies = new Map<string, YieldFarmingStrategy>();
+
+/** Performance snapshots keyed by strategyId */
+const yieldPerformance = new Map<string, StrategyPerformanceSnapshot[]>();
+
+/**
+ * APY lookup table used by the optimizer.
+ * In production these would come from an on-chain oracle or price feed.
+ */
+const POOL_APY_ESTIMATES: Record<string, number> = {};
+
+/** Minimum total allocation BPS required when creating a strategy */
+const TOTAL_ALLOCATION_BPS = 10_000;
+
+/** Base APY boost granted by auto-compounding per interval (mirrors vault service) */
+const COMPOUND_INTERVAL_MULTIPLIERS: Record<string, number> = {
+  hourly: 1.35,
+  daily: 1.28,
+  weekly: 1.15,
+  manual: 1.0,
+};
+
+/** Risk-tier APY caps (bps) – conservative strategies get capped yield */
+const RISK_APY_CAP: Record<string, number> = {
+  conservative: 8,
+  balanced: 18,
+  aggressive: 40,
+};
 
 function now(): string {
   return new Date().toISOString();
@@ -57,6 +97,38 @@ function accrueRewards(position: StakingPosition): string {
 
   const current = BigInt(position.earnedRewards);
   return (current + reward).toString();
+}
+
+// ─── Yield farming pure helpers ───────────────────────────────────────────────
+
+/**
+ * Compute the weighted-average APY across pools, capped by the risk tier.
+ */
+function computeBlendedApy(pools: PoolAllocation[], riskTier: string): number {
+  if (pools.length === 0) return 0;
+  const weighted = pools.reduce(
+    (sum, p) => sum + p.estimatedApy * p.allocationBps,
+    0
+  );
+  const raw = weighted / TOTAL_ALLOCATION_BPS;
+  const cap = RISK_APY_CAP[riskTier] ?? 40;
+  return Math.round(Math.min(raw, cap) * 100) / 100;
+}
+
+/**
+ * Compute the ISO timestamp for the next scheduled compound based on the
+ * chosen compounding interval.
+ */
+function computeNextCompoundAt(interval: string): string {
+  const intervalMs: Record<string, number> = {
+    hourly: 60 * 60 * 1000,
+    daily: 24 * 60 * 60 * 1000,
+    weekly: 7 * 24 * 60 * 60 * 1000,
+    manual: 0,
+  };
+  const ms = intervalMs[interval] ?? intervalMs['daily']!;
+  if (ms === 0) return '';
+  return new Date(Date.now() + ms).toISOString();
 }
 
 export class StakingService {
@@ -270,6 +342,334 @@ export class StakingService {
       ...p,
       earnedRewards: accrueRewards(p),
     }));
+  }
+
+  // ─── Yield Farming Strategy Optimizer ──────────────────────────────────────
+
+  /**
+   * Create a new yield farming strategy for a user.
+   * Validates that pool allocations sum to 10 000 bps and that each pool
+   * address is non-empty, then persists the strategy in the in-memory store.
+   */
+  createYieldStrategy(req: CreateYieldStrategyRequest): YieldFarmingStrategy {
+    if (!req.userAddress) {
+      throw Object.assign(new Error('userAddress is required'), { status: 400 });
+    }
+    if (!req.pools || req.pools.length === 0) {
+      throw Object.assign(new Error('At least one pool allocation is required'), { status: 400 });
+    }
+
+    const totalBps = req.pools.reduce((sum, p) => sum + p.allocationBps, 0);
+    if (totalBps !== TOTAL_ALLOCATION_BPS) {
+      throw Object.assign(
+        new Error(`Pool allocations must sum to ${TOTAL_ALLOCATION_BPS} bps, got ${totalBps}`),
+        { status: 400 }
+      );
+    }
+
+    for (const p of req.pools) {
+      if (!p.poolAddress || p.poolAddress.trim() === '') {
+        throw Object.assign(new Error('Each pool must have a non-empty poolAddress'), {
+          status: 400,
+        });
+      }
+      if (p.allocationBps <= 0) {
+        throw Object.assign(new Error('Each pool allocationBps must be positive'), { status: 400 });
+      }
+    }
+
+    // Deactivate any currently active strategy for this user
+    for (const [id, strat] of yieldStrategies) {
+      if (strat.userAddress === req.userAddress && strat.active) {
+        yieldStrategies.set(id, { ...strat, active: false, updatedAt: now() });
+      }
+    }
+
+    // Enrich pools with utilization snapshot (defaults to 0 if unknown)
+    const enrichedPools: PoolAllocation[] = req.pools.map((p) => ({
+      ...p,
+      currentUtilizationBps: 0,
+      estimatedApy: POOL_APY_ESTIMATES[p.poolAddress] ?? p.estimatedApy,
+    }));
+
+    const blendedApy = computeBlendedApy(enrichedPools, req.riskTier);
+    const compoundMultiplier = COMPOUND_INTERVAL_MULTIPLIERS[req.compoundingInterval] ?? 1.28;
+    const effectiveApy = req.autoCompoundEnabled !== false
+      ? Math.round(blendedApy * compoundMultiplier * 100) / 100
+      : blendedApy;
+
+    const strategyId = randomUUID();
+    const ts = now();
+
+    const strategy: YieldFarmingStrategy = {
+      strategyId,
+      userAddress: req.userAddress,
+      name: req.name,
+      objective: req.objective,
+      riskTier: req.riskTier,
+      compoundingInterval: req.compoundingInterval,
+      pools: enrichedPools,
+      totalAllocatedBps: TOTAL_ALLOCATION_BPS,
+      estimatedBlendedApy: effectiveApy,
+      autoCompoundEnabled: req.autoCompoundEnabled !== false,
+      active: true,
+      createdAt: ts,
+      updatedAt: ts,
+      nextCompoundAt: computeNextCompoundAt(req.compoundingInterval),
+    };
+
+    yieldStrategies.set(strategyId, strategy);
+    yieldPerformance.set(strategyId, []);
+
+    logger.info('Yield farming strategy created', {
+      strategyId,
+      userAddress: req.userAddress,
+      objective: req.objective,
+    });
+
+    return strategy;
+  }
+
+  /**
+   * Return all strategies for a specific user.
+   */
+  getUserYieldStrategies(userAddress: string): YieldFarmingStrategy[] {
+    return Array.from(yieldStrategies.values()).filter(
+      (s) => s.userAddress === userAddress
+    );
+  }
+
+  /**
+   * Return all available (active) strategies across all users.
+   * Used by the strategy listing endpoint.
+   */
+  getAllYieldStrategies(): YieldFarmingStrategy[] {
+    return Array.from(yieldStrategies.values());
+  }
+
+  /**
+   * Activate a previously created (or deactivated) strategy.
+   * Automatically deactivates any other active strategy for the same user.
+   */
+  activateYieldStrategy(req: ActivateYieldStrategyRequest): YieldFarmingStrategy {
+    const strategy = yieldStrategies.get(req.strategyId);
+    if (!strategy) {
+      throw Object.assign(new Error('Strategy not found'), { status: 404 });
+    }
+    if (strategy.userAddress !== req.userAddress) {
+      throw Object.assign(new Error('Strategy does not belong to this user'), { status: 403 });
+    }
+    if (strategy.active) {
+      throw Object.assign(new Error('Strategy is already active'), { status: 400 });
+    }
+
+    // Deactivate any other active strategy for this user
+    for (const [id, strat] of yieldStrategies) {
+      if (id !== req.strategyId && strat.userAddress === req.userAddress && strat.active) {
+        yieldStrategies.set(id, { ...strat, active: false, updatedAt: now() });
+      }
+    }
+
+    const updated: YieldFarmingStrategy = {
+      ...strategy,
+      active: true,
+      updatedAt: now(),
+      nextCompoundAt: computeNextCompoundAt(strategy.compoundingInterval),
+    };
+    yieldStrategies.set(req.strategyId, updated);
+
+    logger.info('Yield farming strategy activated', {
+      strategyId: req.strategyId,
+      userAddress: req.userAddress,
+    });
+    return updated;
+  }
+
+  /**
+   * Manually trigger auto-compounding for a strategy.
+   * Records a performance snapshot, updates LP fee totals, and resets the
+   * next-compound timestamp.
+   */
+  compoundStrategy(req: CompoundStrategyRequest): {
+    strategy: YieldFarmingStrategy;
+    compoundedAmount: string;
+    newApy: number;
+  } {
+    const strategy = yieldStrategies.get(req.strategyId);
+    if (!strategy) {
+      throw Object.assign(new Error('Strategy not found'), { status: 404 });
+    }
+    if (strategy.userAddress !== req.userAddress) {
+      throw Object.assign(new Error('Strategy does not belong to this user'), { status: 403 });
+    }
+    if (!strategy.active) {
+      throw Object.assign(new Error('Cannot compound an inactive strategy'), { status: 400 });
+    }
+
+    // Simulate compound: estimate yield earned since last compound
+    const lastTs = strategy.lastCompoundedAt
+      ? new Date(strategy.lastCompoundedAt).getTime()
+      : new Date(strategy.createdAt).getTime();
+    const elapsedMs = Date.now() - lastTs;
+    const elapsedYears = elapsedMs / (365 * 24 * 60 * 60 * 1000);
+
+    // Simplified: compound on a nominal TVL of 1 000 000 stroops per active pool
+    const nominalTvl = strategy.pools.length * 1_000_000;
+    const compoundedRaw = Math.floor(nominalTvl * (strategy.estimatedBlendedApy / 100) * elapsedYears);
+    const compoundedAmount = Math.max(compoundedRaw, 0).toString();
+
+    // Re-score APY with compounding boost
+    const multiplier = COMPOUND_INTERVAL_MULTIPLIERS[strategy.compoundingInterval] ?? 1.28;
+    const newBlended = computeBlendedApy(strategy.pools, strategy.riskTier);
+    const newApy = Math.round(newBlended * multiplier * 100) / 100;
+
+    const ts = now();
+    const snapshot: StrategyPerformanceSnapshot = {
+      timestamp: ts,
+      totalValueLocked: String(nominalTvl),
+      yieldEarned: compoundedAmount,
+      compoundedAmount,
+      apy: newApy,
+      ilImpactBps: 0, // IL impact tracked on-chain; 0 in API layer simulation
+    };
+
+    const snapshots = yieldPerformance.get(req.strategyId) ?? [];
+    snapshots.push(snapshot);
+    yieldPerformance.set(req.strategyId, snapshots);
+
+    const updated: YieldFarmingStrategy = {
+      ...strategy,
+      estimatedBlendedApy: newApy,
+      lastCompoundedAt: ts,
+      nextCompoundAt: computeNextCompoundAt(strategy.compoundingInterval),
+      updatedAt: ts,
+    };
+    yieldStrategies.set(req.strategyId, updated);
+
+    logger.info('Strategy compounded', {
+      strategyId: req.strategyId,
+      compoundedAmount,
+      newApy,
+    });
+
+    return { strategy: updated, compoundedAmount, newApy };
+  }
+
+  /**
+   * Return aggregated performance data for a strategy.
+   */
+  getStrategyPerformance(strategyId: string, userAddress: string): YieldStrategyPerformance {
+    const strategy = yieldStrategies.get(strategyId);
+    if (!strategy) {
+      throw Object.assign(new Error('Strategy not found'), { status: 404 });
+    }
+    if (strategy.userAddress !== userAddress) {
+      throw Object.assign(new Error('Strategy does not belong to this user'), { status: 403 });
+    }
+
+    const snapshots = yieldPerformance.get(strategyId) ?? [];
+
+    const totalYieldEarned = snapshots
+      .reduce((sum, s) => sum + BigInt(s.yieldEarned), BigInt(0))
+      .toString();
+
+    const totalCompounded = snapshots
+      .reduce((sum, s) => sum + BigInt(s.compoundedAmount), BigInt(0))
+      .toString();
+
+    const averageIlImpactBps =
+      snapshots.length > 0
+        ? Math.round(snapshots.reduce((sum, s) => sum + s.ilImpactBps, 0) / snapshots.length)
+        : 0;
+
+    const realizedApy =
+      snapshots.length > 0
+        ? Math.round((snapshots.reduce((sum, s) => sum + s.apy, 0) / snapshots.length) * 100) / 100
+        : strategy.estimatedBlendedApy;
+
+    return {
+      strategyId,
+      userAddress,
+      totalYieldEarned,
+      totalCompounded,
+      compoundCount: snapshots.length,
+      realizedApy,
+      averageIlImpactBps,
+      snapshots,
+    };
+  }
+
+  /**
+   * Run the pool allocation optimizer over a list of pool addresses.
+   * Mirrors the on-chain `optimize_allocation` logic in amm.rs but operates
+   * on API-layer utilization data so callers can preview recommendations
+   * without submitting an on-chain transaction.
+   *
+   * Optimal utilization target: 80 % (8 000 bps).
+   * Rebalance threshold:          5 % (  500 bps).
+   */
+  getYieldOptimizationRecommendation(
+    poolAddresses: string[],
+    utilizationMap: Record<string, number> = {}
+  ): YieldOptimizationRecommendation {
+    if (!poolAddresses || poolAddresses.length === 0) {
+      throw Object.assign(new Error('At least one pool address is required'), { status: 400 });
+    }
+
+    const OPTIMAL_BPS = 8_000;
+    const REBALANCE_THRESHOLD_BPS = 500;
+    const DEFAULT_BUFFER_BPS = 8_000;
+
+    let totalUtilization = 0;
+
+    const pools = poolAddresses.map((addr) => {
+      const currentUtilizationBps = utilizationMap[addr] ?? 0;
+      totalUtilization += currentUtilizationBps;
+
+      const deviation = Math.abs(currentUtilizationBps - OPTIMAL_BPS);
+      let action: 'increase' | 'decrease' | 'no_change';
+      let adjustmentAmount: number;
+
+      if (deviation < REBALANCE_THRESHOLD_BPS) {
+        action = 'no_change';
+        adjustmentAmount = 0;
+      } else if (currentUtilizationBps < OPTIMAL_BPS) {
+        action = 'increase';
+        const available = 10_000 - DEFAULT_BUFFER_BPS;
+        adjustmentAmount = Math.floor(
+          (available * (OPTIMAL_BPS - currentUtilizationBps)) / 10_000
+        );
+      } else {
+        action = 'decrease';
+        const excess = currentUtilizationBps - OPTIMAL_BPS;
+        adjustmentAmount = Math.floor((excess * currentUtilizationBps) / 10_000);
+      }
+
+      return {
+        poolAddress: addr,
+        currentUtilizationBps,
+        recommendedAllocationBps: OPTIMAL_BPS,
+        action,
+        adjustmentAmount,
+      };
+    });
+
+    const avgUtilization =
+      poolAddresses.length > 0 ? Math.floor(totalUtilization / poolAddresses.length) : 0;
+
+    const efficiency = Math.min(avgUtilization, OPTIMAL_BPS);
+
+    const estimatedYieldImprovementBps =
+      avgUtilization < OPTIMAL_BPS
+        ? Math.floor((OPTIMAL_BPS - avgUtilization) / 100)
+        : 0;
+
+    return {
+      pools,
+      totalCapitalEfficiencyBps: efficiency,
+      estimatedYieldImprovementBps,
+      generatedAt: now(),
+    };
   }
 }
 

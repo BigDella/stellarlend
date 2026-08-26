@@ -48,7 +48,9 @@ members = [
   "contracts/yield-splitter",
   "contracts/vault-share",
   "contracts/auto-compound-vault",
+  "contracts/risk-scoring",
   "contracts/pool-interfaces",
+  "contracts/pool-migration",
   "contracts/yield-router",
   "contracts/shared-events",
   "contracts/dutch-auction",
@@ -70,7 +72,7 @@ exclude = [
 [workspace.lints.rust]
 
 [workspace.dependencies]
-soroban-sdk = "23.4.1"
+soroban-sdk = "27.0.2"
 stellarlend-safe-math = { path = "contracts/safe-math" }
 stellarlend-math = { path = "contracts/math" }
 soroban-token-sdk = { version = "23.4.1" }

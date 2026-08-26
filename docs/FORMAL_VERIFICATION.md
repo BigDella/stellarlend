@@ -2,7 +2,8 @@
 
 This document describes the formal verification specification suite
 introduced for **Issue #224** (DevTooling: formal verification of critical
-functions).
+functions) and extended for **Issue #384** (protocol-level lending
+invariants).
 
 ## Overview
 
@@ -32,8 +33,9 @@ and are completely absent from the production WASM binary.
 | `spec::rewards` | `update_global_index`, `update_user`, `claim` | R-01 … R-07 |
 | `spec::deposit_spec` | `deposit` | D-01 … D-07 |
 | `spec::withdraw_spec` | `withdraw` | W-01 … W-07 |
+| `spec::protocol_invariants` | protocol accounting, health factor, interest index | P-01 ... P-05, H-01 ... H-05, I-01 ... I-03 |
 
-**Total: 56 lemmas across 8 critical function groups**
+**Total: 69 lemmas across 9 critical function groups**
 
 ---
 
@@ -43,20 +45,28 @@ and are completely absent from the production WASM binary.
 
 ```bash
 # From stellar-lend/ workspace root:
-cargo test -p stellarlend-lending --features spec -- spec::
+cargo check -p stellarlend-lending --features spec
+cargo test -p stellarlend-lending --features spec --test protocol_formal_specs
 
 # Single spec module:
-cargo test -p stellarlend-lending --features spec -- spec::interest::
+cargo test -p stellarlend-lending --features spec --test protocol_formal_specs \
+  lemma_p01_accounting_identity_holds_after_deposits
 
 # With backtrace on failure:
-RUST_BACKTRACE=1 cargo test -p stellarlend-lending --features spec -- spec::
+RUST_BACKTRACE=1 cargo test -p stellarlend-lending --features spec \
+  --test protocol_formal_specs
 ```
 
 Expected output:
 
 ```
-test result: ok. 56 passed; 0 failed; 0 ignored
+test result: ok. 13 passed; 0 failed; 0 ignored
 ```
+
+The `protocol_formal_specs` integration target is the CI gate for Issue #384.
+It compiles the lending crate with the `spec` feature but avoids unrelated
+legacy unit-test modules, so failures map directly to the formal invariant
+suite.
 
 ### Kani bounded model-checking (exhaustive, slow)
 
@@ -73,6 +83,9 @@ Run all harnesses:
 cargo kani \
   --package stellarlend-lending \
   --features spec \
+  --harness spec::protocol_invariants::kani_protocol_accounting_preserves_identity \
+  --harness spec::protocol_invariants::kani_health_factor_consistency \
+  --harness spec::protocol_invariants::kani_interest_index_monotonic \
   --harness spec::interest::kani_interest_properties \
   --harness spec::collateral::kani_collateral_ratio_properties \
   --harness spec::accounting::kani_accounting_invariants \
@@ -96,6 +109,7 @@ contracts/lending/src/
     ├── collateral.rs    — C-01…C-06: validate_collateral_ratio lemmas
     ├── accounting.rs    — A-01…A-08: borrow/repay accounting invariants
     ├── health_factor.rs — H-01…H-07: compute_health_factor lemmas
+    ├── protocol_invariants.rs — P/H/I protocol-level conservation lemmas
     ├── liquidation.rs   — L-01…L-06: get_max_liquidatable_amount lemmas
     ├── rewards.rs       — R-01…R-07: rewards distribution lemmas
     ├── deposit_spec.rs  — D-01…D-07: deposit lemmas
@@ -151,6 +165,13 @@ Invariants INV-1 through INV-6 (from `spec::accounting`) prove that:
 - Total debt is bounded by the ceiling (INV-6)
 - Borrow and repay are inverse operations (A-05)
 
+The protocol-level model in `spec::protocol_invariants` additionally proves:
+- `total_deposits = total_debt + reserves` after deposits, borrows, and repays
+- over-borrow and over-repay paths reject without mutating state
+- health factor calculations track the liquidation threshold before and after
+  collateral/debt changes
+- interest index accrual never decreases when timestamps move forward
+
 ### Mathematical Correctness
 
 The interest formula (I-07), collateral boundary (C-06), health factor boundary
@@ -183,7 +204,9 @@ When modifying a function covered by a spec:
 2. **Update the mathematical model** in the spec doc comment.
 3. **Update the reference implementation** to match the new logic.
 4. **Update or add lemmas** that cover the new behaviour.
-5. **Re-run** `cargo test --features spec -- spec::` and confirm green.
+5. **Re-run** `cargo check -p stellarlend-lending --features spec` and
+   `cargo test -p stellarlend-lending --features spec --test protocol_formal_specs`
+   and confirm green.
 
 The GitHub Actions workflow enforces this gate on every PR touching the
 affected files.
@@ -196,7 +219,11 @@ The workflow at `.github/workflows/formal-verification.yml` runs:
 
 | Job | Trigger | Purpose |
 |---|---|---|
-| `spec-lemmas` | Every push/PR | Run 56 lemma tests (ubuntu + macos) |
+| `spec-lemmas` | Every push/PR | Run protocol formal spec lemmas (ubuntu + macos) |
 | `spec-isolation` | Every push/PR | Assert no spec symbols in production WASM |
 | `spec-lint` | Every push/PR | Clippy on spec modules |
 | `kani-harnesses` | Manual dispatch | Bounded model-checking (slow) |
+
+Kani is used as the Rust/Soroban model checker for this repository. It fills
+the same role that Certora Prover fills for Solidity/EVM projects while keeping
+the verification target native to the contract language used here.

@@ -6,7 +6,7 @@ FUZZ_DIR="$ROOT_DIR/stellar-lend/fuzz"
 
 MIN_FILES="${MIN_CORPUS_FILES:-10}"
 
-targets=(lending_actions amm_actions bridge_actions)
+targets=(lending_critical lending_actions amm_actions bridge_actions)
 
 for t in "${targets[@]}"; do
   d="$FUZZ_DIR/corpus/$t"

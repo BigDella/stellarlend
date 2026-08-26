@@ -1,29 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TARGET="${1:-lending_actions}"
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 <target> <crash_file>"
+  echo "Example: $0 lending_critical stellar-lend/fuzz/artifacts/lending_critical/crash-*"
+  exit 2
+fi
+
+TARGET="$1"
+CRASH_FILE="$2"
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-ARTIFACT_DIR="$ROOT_DIR/stellar-lend/fuzz/artifacts/$TARGET"
-REGRESSION_DIR="$ROOT_DIR/stellar-lend/fuzz/regressions/$TARGET"
+FUZZ_DIR="$ROOT_DIR/stellar-lend/fuzz"
 
-mkdir -p "$REGRESSION_DIR"
-
-if [[ ! -d "$ARTIFACT_DIR" ]]; then
-  echo "No artifact directory found for $TARGET: $ARTIFACT_DIR"
-  exit 0
+if [[ ! -f "$CRASH_FILE" ]]; then
+  echo "Crash file not found: $CRASH_FILE"
+  exit 1
 fi
 
-crash="$(find "$ARTIFACT_DIR" -maxdepth 1 -type f \( -name 'crash-*' -o -name 'timeout-*' \) | sort | head -n 1)"
-if [[ -z "$crash" ]]; then
-  echo "No crash or timeout artifact found for $TARGET"
-  exit 0
-fi
+SHA="$(sha256sum "$CRASH_FILE" | awk '{print substr($1,1,12)}')"
+REGRESSION_DIR="$FUZZ_DIR/corpus/$TARGET"
+REPORT_DIR="$FUZZ_DIR/regressions/$TARGET"
+REGRESSION_FILE="$REGRESSION_DIR/regression_$SHA"
+REPORT_FILE="$REPORT_DIR/regression_$SHA.md"
 
-name="$(basename "$crash")"
-cp "$crash" "$REGRESSION_DIR/$name"
+mkdir -p "$REGRESSION_DIR" "$REPORT_DIR"
+cp "$CRASH_FILE" "$REGRESSION_FILE"
 
-echo "Copied crash artifact to $REGRESSION_DIR/$name"
-echo "Reproduce locally with:"
-echo "  bash scripts/fuzz/repro.sh $TARGET stellar-lend/fuzz/regressions/$TARGET/$name"
+cat > "$REPORT_FILE" <<EOF
+# Fuzz Regression $SHA
 
-bash "$ROOT_DIR/scripts/fuzz/repro.sh" "$TARGET" "$REGRESSION_DIR/$name" -- -runs=1 || true
+- Target: \`$TARGET\`
+- Corpus file: \`stellar-lend/fuzz/corpus/$TARGET/regression_$SHA\`
+- Source crash: \`$CRASH_FILE\`
+
+Replay:
+
+\`\`\`bash
+cd stellar-lend
+cargo +nightly fuzz run $TARGET fuzz/corpus/$TARGET/regression_$SHA -- -runs=1
+\`\`\`
+
+Minimize before committing if the file is large:
+
+\`\`\`bash
+cd stellar-lend
+cargo +nightly fuzz tmin $TARGET fuzz/corpus/$TARGET/regression_$SHA
+\`\`\`
+EOF
+
+echo "Regression corpus copied to: $REGRESSION_FILE"
+echo "Triage report written to: $REPORT_FILE"
