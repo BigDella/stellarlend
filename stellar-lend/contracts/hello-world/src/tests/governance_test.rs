@@ -291,3 +291,29 @@ fn test_vote_rejected_at_voting_period_boundary() {
     let proposal = client.gov_get_proposal(&proposal_id).unwrap();
     assert_eq!(proposal.status, ProposalStatus::Expired);
 }
+
+#[test]
+fn test_simulate_proposal_dry_run_emergency_pause_impact() {
+    let (env, admin, proposer, _, _, _) = create_test_env();
+    env.mock_all_auths();
+
+    let token = create_test_token(&env, &admin);
+    mint_tokens(&env, &token, &proposer, 1000);
+
+    let client = setup_governance(&env, &admin, &token);
+    let proposal_id = client.gov_create_proposal(
+        &proposer,
+        &ProposalType::EmergencyPause(true),
+        &String::from_str(&env, "Pause protocol"),
+        &None,
+    );
+
+    let dry = client.gov_simulate_proposal_dry_run(&proposal_id);
+    assert_eq!(dry.proposal_id, proposal_id);
+    assert!(dry.gas_units_estimate > 0);
+    assert!(!dry.diffs.is_empty());
+
+    let cached = client.gov_get_dry_run_cache(&proposal_id);
+    assert!(cached.is_some());
+    assert_eq!(cached.unwrap().proposal_id, proposal_id);
+}

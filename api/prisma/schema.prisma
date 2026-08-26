@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PoolSnapshot {
+  id             String   @id @default(uuid())
+  poolAddress    String
+  tvl            Decimal
+  utilization    Decimal
+  borrowApy      Decimal
+  supplyApy      Decimal
+  badDebt        Decimal  @default(0)
+  totalDeposits  Decimal
+  totalBorrows   Decimal
+  snapshotAt     DateTime @default(now())
+
+  @@index([poolAddress, snapshotAt])
+  @@map("pool_snapshots")
+}
+
+model PoolPerformance {
+  id                String   @id @default(uuid())
+  poolAddress       String
+  period            String
+  avgSupplyApy      Decimal
+  avgBorrowApy      Decimal
+  avgUtilization    Decimal
+  volatility        Decimal
+  cumulativeReturn  Decimal
+  maxDrawdown       Decimal
+  sharpeRatio       Decimal
+  computedAt        DateTime @default(now())
+
+  @@unique([poolAddress, period])
+  @@map("pool_performance")
+}
+
+model PoolPerformanceEvent {
+  id           String   @id @default(uuid())
+  poolAddress  String
+  eventType    String
+  payload      Json
+  recordedAt   DateTime @default(now())
+
+  @@index([poolAddress, recordedAt])
+  @@map("pool_performance_events")
+}

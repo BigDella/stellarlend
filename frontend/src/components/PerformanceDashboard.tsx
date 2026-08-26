@@ -40,9 +40,12 @@ interface PerformanceState {
   snapshots: PoolSnapshot[];
   metrics: PoolPerformanceMetrics | null;
   comparison: PoolComparison[];
+  chartSeries: { timestamp: string; cumulativeReturn: number; supplyApy: number; utilization: number }[];
+  heatmap: { day: number; hour: number; utilization: number }[];
+  benchmarks: { name: string; supplyApy: number; supplyApyDelta: number }[];
   summary: { totalPoolsTracked: number; avgGlobalApy: number; totalTvl: number } | null;
   isLoading: boolean;
-  view: 'overview' | 'charts' | 'comparison';
+  view: 'overview' | 'charts' | 'comparison' | 'heatmap' | 'benchmarks';
 }
 
 export const PerformanceDashboard: React.FC = () => {
@@ -52,6 +55,9 @@ export const PerformanceDashboard: React.FC = () => {
     snapshots: [],
     metrics: null,
     comparison: [],
+    chartSeries: [],
+    heatmap: [],
+    benchmarks: [],
     summary: null,
     isLoading: true,
     view: 'overview',
@@ -82,18 +88,27 @@ export const PerformanceDashboard: React.FC = () => {
   const loadPoolMetrics = useCallback(async () => {
     if (!state.selectedPool) return;
     try {
-      const [snapshotsRes, metricsRes] = await Promise.all([
+      const [snapshotsRes, metricsRes, chartRes, heatRes, benchRes] = await Promise.all([
         fetch(`/api/pool-performance/snapshots/${state.selectedPool}?period=${state.period}`),
         fetch(`/api/pool-performance/metrics/${state.selectedPool}?period=${state.period}`),
+        fetch(`/api/pool-performance/charts/${state.selectedPool}?period=${state.period}`),
+        fetch(`/api/pool-performance/heatmap/${state.selectedPool}?period=${state.period}`),
+        fetch(`/api/pool-performance/benchmarks/${state.selectedPool}?period=${state.period}`),
       ]);
 
       const snapshotsData = await snapshotsRes.json();
       const metricsData = await metricsRes.json();
+      const chartData = await chartRes.json();
+      const heatData = await heatRes.json();
+      const benchData = await benchRes.json();
 
       setState(prev => ({
         ...prev,
-        snapshots: snapshotsData.snapshots || [],
+        snapshots: snapshotsData.snapshots || snapshotsData || [],
         metrics: metricsData,
+        chartSeries: Array.isArray(chartData) ? chartData : [],
+        heatmap: Array.isArray(heatData) ? heatData : [],
+        benchmarks: benchData.benchmarks || [],
       }));
     } catch (err) {
       console.error('Failed to load pool metrics:', err);
@@ -151,7 +166,7 @@ export const PerformanceDashboard: React.FC = () => {
       )}
 
       <div style={styles.tabBar}>
-        {(['overview', 'charts', 'comparison'] as const).map(v => (
+        {(['overview', 'charts', 'comparison', 'heatmap', 'benchmarks'] as const).map(v => (
           <button
             key={v}
             onClick={() => setState(prev => ({ ...prev, view: v }))}
@@ -347,6 +362,72 @@ export const PerformanceDashboard: React.FC = () => {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {state.view === 'heatmap' && (
+        <div style={styles.section}>
+          <h3 style={styles.sectionTitle}>Utilization Heatmap (UTC day × hour)</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(24, 1fr)', gap: 2 }}>
+            {state.heatmap.map((cell, i) => {
+              const intensity = Math.min(1, Math.max(0, cell.utilization));
+              return (
+                <div
+                  key={i}
+                  title={`D${cell.day} H${cell.hour}: ${(intensity * 100).toFixed(0)}%`}
+                  style={{
+                    height: 12,
+                    backgroundColor: `rgba(0, 123, 255, ${0.1 + intensity * 0.9})`,
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {state.view === 'benchmarks' && (
+        <div style={styles.section}>
+          <h3 style={styles.sectionTitle}>DeFi Benchmarks (Compound / Aave)</h3>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Protocol</th>
+                <th style={styles.th}>Supply APY</th>
+                <th style={styles.th}>Delta vs Pool</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.benchmarks.map((b) => (
+                <tr key={b.name} style={styles.tr}>
+                  <td style={styles.td}>{b.name}</td>
+                  <td style={styles.td}>{(b.supplyApy * 100).toFixed(2)}%</td>
+                  <td style={styles.td}>
+                    {b.supplyApyDelta >= 0 ? '+' : ''}
+                    {(b.supplyApyDelta * 100).toFixed(2)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {state.chartSeries.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <h4>Cumulative return</h4>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 80 }}>
+                {state.chartSeries.slice(-48).map((p, i) => (
+                  <div
+                    key={i}
+                    title={`${p.timestamp}: ${(p.cumulativeReturn * 100).toFixed(3)}%`}
+                    style={{
+                      width: 6,
+                      height: `${Math.max(4, Math.abs(p.cumulativeReturn) * 400)}%`,
+                      backgroundColor: p.cumulativeReturn >= 0 ? '#28a745' : '#dc3545',
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

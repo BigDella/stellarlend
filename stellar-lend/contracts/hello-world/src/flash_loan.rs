@@ -64,6 +64,12 @@ pub enum FlashLoanError {
     PriceManipulationDetected = 14,
     /// Flash loan crossed into a later ledger sequence before completion.
     Expired = 15,
+    /// Combo liquidation would not cover principal, fee, and a minimum profit.
+    Unprofitable = 16,
+    /// Multi-asset flash loan was submitted with no legs.
+    EmptyLegs = 17,
+    /// Multi-asset flash loan exceeded the maximum number of legs.
+    TooManyLegs = 18,
 }
 
 /// Storage keys for flash loan-related data
@@ -148,6 +154,10 @@ pub struct FlashLoanRecord {
 const DEFAULT_FLASH_LOAN_FEE_BPS: i128 = 9;
 const DEFAULT_MAX_FLASH_LOAN_AMOUNT: i128 = 1_000_000_000_000; // Example: 1M tokens
 const DEFAULT_MIN_FLASH_LOAN_AMOUNT: i128 = 100; // Example: 100 tokens
+/// Maximum assets in a single multi-asset flash loan (gas bound).
+pub const MAX_FLASH_LOAN_LEGS: u32 = 5;
+/// Default 7-decimal unit price used when an oracle quote is unavailable.
+const DEFAULT_ASSET_PRICE: i128 = 10_000_000;
 
 /// Default flash loan operational configuration.
 fn get_default_config() -> FlashLoanConfig {
@@ -570,4 +580,381 @@ pub fn set_flash_loan_fee(env: &Env, caller: Address, fee_bps: i128) -> Result<(
     let config_key = FlashLoanDataKey::FlashLoanConfig;
     env.storage().persistent().set(&config_key, &config);
     Ok(())
+}
+
+// ========================================================================
+// Flash loan + liquidation combo (Issue #661)
+// ========================================================================
+
+/// One asset/amount pair in a multi-asset flash loan.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlashLoanLeg {
+    pub asset: Address,
+    pub amount: i128,
+}
+
+/// Read-only profit simulation for a flash-loan-funded liquidation.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlashLoanLiquidationSim {
+    pub debt_amount: i128,
+    pub flash_fee: i128,
+    pub collateral_seized: i128,
+    pub incentive_amount: i128,
+    pub estimated_profit: i128,
+    pub profitable: bool,
+    pub gas_units_estimate: u64,
+}
+
+/// Result of an executed flash-loan liquidation combo.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlashLoanLiquidationResult {
+    pub debt_repaid: i128,
+    pub collateral_seized: i128,
+    pub flash_fee: i128,
+    pub profit: i128,
+}
+
+fn resolve_asset_price(env: &Env, asset: &Option<Address>) -> i128 {
+    let Some(addr) = asset else {
+        return DEFAULT_ASSET_PRICE;
+    };
+    crate::oracle::get_price(env, addr).unwrap_or(DEFAULT_ASSET_PRICE)
+}
+
+fn estimate_combo_gas(legs: u32) -> u64 {
+    // Base combo path avoids the callback invoke; each extra asset adds reads/writes.
+    80_000u64.saturating_add(u64::from(legs.saturating_mul(12_000)))
+}
+
+/// Pre-execution profit simulation for a flash loan + liquidation combo.
+///
+/// Does not mutate protocol state. Returns `Unprofitable` only as a flag on
+/// the result (never as an error) so callers can inspect the numbers.
+pub fn simulate_flash_loan_liquidation(
+    env: &Env,
+    debt_asset: Option<Address>,
+    collateral_asset: Option<Address>,
+    debt_amount: i128,
+) -> Result<FlashLoanLiquidationSim, FlashLoanError> {
+    if debt_amount <= 0 {
+        return Err(FlashLoanError::InvalidAmount);
+    }
+
+    let config = get_flash_loan_config(env);
+    if debt_amount < config.min_amount || debt_amount > config.max_amount {
+        return Err(FlashLoanError::InvalidAmount);
+    }
+
+    let flash_fee = calculate_flash_loan_fee(env, debt_amount)?;
+    let incentive_bps = crate::risk_params::get_liquidation_incentive(env).unwrap_or(1_000);
+    let incentive_amount = debt_amount
+        .checked_mul(incentive_bps)
+        .ok_or(FlashLoanError::Overflow)?
+        .checked_div(BPS_DENOM)
+        .ok_or(FlashLoanError::Overflow)?;
+
+    let debt_price = resolve_asset_price(env, &debt_asset);
+    let coll_price = resolve_asset_price(env, &collateral_asset);
+
+    // seized_value = debt_value * (1 + incentive)
+    let debt_value = debt_amount
+        .checked_mul(debt_price)
+        .ok_or(FlashLoanError::Overflow)?
+        .checked_div(DEFAULT_ASSET_PRICE)
+        .ok_or(FlashLoanError::Overflow)?;
+    let seized_value = debt_value
+        .checked_add(
+            debt_value
+                .checked_mul(incentive_bps)
+                .ok_or(FlashLoanError::Overflow)?
+                .checked_div(BPS_DENOM)
+                .ok_or(FlashLoanError::Overflow)?,
+        )
+        .ok_or(FlashLoanError::Overflow)?;
+    let collateral_seized = if coll_price > 0 {
+        seized_value
+            .checked_mul(DEFAULT_ASSET_PRICE)
+            .ok_or(FlashLoanError::Overflow)?
+            .checked_div(coll_price)
+            .ok_or(FlashLoanError::Overflow)?
+    } else {
+        return Err(FlashLoanError::InvalidAsset);
+    };
+
+    let fee_value = flash_fee
+        .checked_mul(debt_price)
+        .ok_or(FlashLoanError::Overflow)?
+        .checked_div(DEFAULT_ASSET_PRICE)
+        .ok_or(FlashLoanError::Overflow)?;
+    let estimated_profit = seized_value
+        .checked_sub(debt_value)
+        .ok_or(FlashLoanError::Overflow)?
+        .checked_sub(fee_value)
+        .unwrap_or(0);
+
+    Ok(FlashLoanLiquidationSim {
+        debt_amount,
+        flash_fee,
+        collateral_seized,
+        incentive_amount,
+        estimated_profit,
+        profitable: estimated_profit > 0,
+        gas_units_estimate: estimate_combo_gas(1),
+    })
+}
+
+/// Atomic flash loan + liquidation. Rolls back (returns error) when the combo
+/// is unprofitable. Skips the callback invoke for a gas-optimized path.
+pub fn execute_flash_loan_liquidation(
+    env: &Env,
+    liquidator: Address,
+    borrower: Address,
+    debt_asset: Option<Address>,
+    collateral_asset: Option<Address>,
+    debt_amount: i128,
+) -> Result<FlashLoanLiquidationResult, FlashLoanError> {
+    liquidator.require_auth();
+
+    let sim = simulate_flash_loan_liquidation(env, debt_asset.clone(), collateral_asset.clone(), debt_amount)?;
+    if !sim.profitable {
+        return Err(FlashLoanError::Unprofitable);
+    }
+
+    let Some(debt_addr) = debt_asset.clone() else {
+        return Err(FlashLoanError::InvalidAsset);
+    };
+
+    let pause_map_key = FlashLoanDataKey::PauseSwitches;
+    if let Some(pause_map) = env
+        .storage()
+        .persistent()
+        .get::<FlashLoanDataKey, Map<Symbol, bool>>(&pause_map_key)
+    {
+        if pause_map
+            .get(Symbol::new(env, "pause_flash_loan"))
+            .unwrap_or(false)
+        {
+            return Err(FlashLoanError::FlashLoanPaused);
+        }
+    }
+
+    let token_client = soroban_sdk::token::Client::new(env, &debt_addr);
+    let pool = env.current_contract_address();
+    let initial_balance = token_client.balance(&pool);
+    if initial_balance < debt_amount {
+        return Err(FlashLoanError::InsufficientLiquidity);
+    }
+    check_liquidity_cap(env, initial_balance, debt_amount)?;
+    check_price_impact(env, initial_balance, debt_amount)?;
+    acquire_asset_guard(env, &debt_addr)?;
+
+    let start_sequence = env.ledger().sequence_number();
+
+    // Fund the liquidator from pool liquidity (the flash leg).
+    token_client.transfer(&pool, &liquidator, &debt_amount);
+
+    emit_flash_loan_initiated(
+        env,
+        FlashLoanInitiatedEvent {
+            user: liquidator.clone(),
+            asset: debt_addr.clone(),
+            amount: debt_amount,
+            fee: sim.flash_fee,
+            callback: pool.clone(),
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
+    let (_debt_repaid, collateral_seized, _incentive) = crate::liquidate::liquidate(
+        env,
+        liquidator.clone(),
+        borrower.clone(),
+        debt_asset,
+        collateral_asset,
+        debt_amount,
+    )
+    .map_err(|_| FlashLoanError::CallbackFailed)?;
+
+    if env.ledger().sequence_number() != start_sequence {
+        return Err(FlashLoanError::Expired);
+    }
+
+    let total_required = debt_amount
+        .checked_add(sim.flash_fee)
+        .ok_or(FlashLoanError::Overflow)?;
+
+    token_client.transfer_from(&pool, &liquidator, &pool, &total_required);
+
+    if sim.flash_fee > 0 {
+        let reserve_key = DepositDataKey::ProtocolReserve(Some(debt_addr.clone()));
+        let current_reserve = env
+            .storage()
+            .persistent()
+            .get::<DepositDataKey, i128>(&reserve_key)
+            .unwrap_or(0);
+        let new_reserve = current_reserve
+            .checked_add(sim.flash_fee)
+            .ok_or(FlashLoanError::Overflow)?;
+        env.storage().persistent().set(&reserve_key, &new_reserve);
+    }
+
+    emit_flash_loan_repaid(
+        env,
+        FlashLoanRepaidEvent {
+            user: liquidator.clone(),
+            asset: debt_addr.clone(),
+            amount: debt_amount,
+            fee: sim.flash_fee,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
+    crate::events::emit_flash_loan_liquidation_combo(
+        env,
+        crate::events::FlashLoanLiquidationComboEvent {
+            liquidator: liquidator.clone(),
+            borrower,
+            debt_asset: debt_addr.clone(),
+            debt_amount,
+            collateral_seized,
+            flash_fee: sim.flash_fee,
+            profit: sim.estimated_profit,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
+
+    release_asset_guard(env, &debt_addr);
+
+    Ok(FlashLoanLiquidationResult {
+        debt_repaid: debt_amount,
+        collateral_seized,
+        flash_fee: sim.flash_fee,
+        profit: sim.estimated_profit,
+    })
+}
+
+/// Multi-asset flash loan: borrow several assets, invoke a single callback,
+/// then pull principal+fee for every leg. Any unpaid leg reverts the tx.
+pub fn execute_multi_asset_flash_loan(
+    env: &Env,
+    user: Address,
+    legs: Vec<FlashLoanLeg>,
+    callback: Address,
+) -> Result<i128, FlashLoanError> {
+    user.require_auth();
+
+    if legs.is_empty() {
+        return Err(FlashLoanError::EmptyLegs);
+    }
+    if legs.len() > MAX_FLASH_LOAN_LEGS {
+        return Err(FlashLoanError::TooManyLegs);
+    }
+
+    let pause_map_key = FlashLoanDataKey::PauseSwitches;
+    if let Some(pause_map) = env
+        .storage()
+        .persistent()
+        .get::<FlashLoanDataKey, Map<Symbol, bool>>(&pause_map_key)
+    {
+        if pause_map
+            .get(Symbol::new(env, "pause_flash_loan"))
+            .unwrap_or(false)
+        {
+            return Err(FlashLoanError::FlashLoanPaused);
+        }
+    }
+
+    let config = get_flash_loan_config(env);
+    let start_sequence = env.ledger().sequence_number();
+    let mut total_fees: i128 = 0;
+    let pool = env.current_contract_address();
+
+    // Validate and fund every leg before the callback so a mid-loop failure
+    // reverts the whole transaction.
+    for i in 0..legs.len() {
+        let leg = legs.get(i).unwrap();
+        if leg.amount <= 0 || leg.amount < config.min_amount || leg.amount > config.max_amount {
+            return Err(FlashLoanError::InvalidAmount);
+        }
+        let fee = calculate_flash_loan_fee(env, leg.amount)?;
+        total_fees = total_fees
+            .checked_add(fee)
+            .ok_or(FlashLoanError::Overflow)?;
+
+        let token_client = soroban_sdk::token::Client::new(env, &leg.asset);
+        let initial_balance = token_client.balance(&pool);
+        if initial_balance < leg.amount {
+            return Err(FlashLoanError::InsufficientLiquidity);
+        }
+        check_liquidity_cap(env, initial_balance, leg.amount)?;
+        check_price_impact(env, initial_balance, leg.amount)?;
+        acquire_asset_guard(env, &leg.asset)?;
+        record_flash_loan(env, &user, &leg.asset, leg.amount, fee, &callback);
+        token_client.transfer(&pool, &callback, &leg.amount);
+
+        emit_flash_loan_initiated(
+            env,
+            FlashLoanInitiatedEvent {
+                user: user.clone(),
+                asset: leg.asset.clone(),
+                amount: leg.amount,
+                fee,
+                callback: callback.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    let callback_symbol = Symbol::new(env, "on_flash_loan_multi");
+    let _: soroban_sdk::Val = env.invoke_contract(
+        &callback,
+        &callback_symbol,
+        (user.clone(), legs.clone(), total_fees).into_val(env),
+    );
+
+    if env.ledger().sequence_number() != start_sequence {
+        return Err(FlashLoanError::Expired);
+    }
+
+    for i in 0..legs.len() {
+        let leg = legs.get(i).unwrap();
+        let fee = calculate_flash_loan_fee(env, leg.amount)?;
+        let total_required = leg
+            .amount
+            .checked_add(fee)
+            .ok_or(FlashLoanError::Overflow)?;
+        let token_client = soroban_sdk::token::Client::new(env, &leg.asset);
+        token_client.transfer_from(&pool, &callback, &pool, &total_required);
+
+        if fee > 0 {
+            let reserve_key = DepositDataKey::ProtocolReserve(Some(leg.asset.clone()));
+            let current_reserve = env
+                .storage()
+                .persistent()
+                .get::<DepositDataKey, i128>(&reserve_key)
+                .unwrap_or(0);
+            let new_reserve = current_reserve
+                .checked_add(fee)
+                .ok_or(FlashLoanError::Overflow)?;
+            env.storage().persistent().set(&reserve_key, &new_reserve);
+        }
+
+        emit_flash_loan_repaid(
+            env,
+            FlashLoanRepaidEvent {
+                user: user.clone(),
+                asset: leg.asset.clone(),
+                amount: leg.amount,
+                fee,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+        clear_flash_loan(env, &user, &leg.asset);
+        release_asset_guard(env, &leg.asset);
+    }
+
+    Ok(total_fees)
 }

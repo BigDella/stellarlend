@@ -211,6 +211,14 @@ impl_from_error!(FlashLoanError, {
     FlashLoanError::Reentrancy => LendingError::Reentrancy,
     FlashLoanError::InvalidCallback => LendingError::InvalidCallback,
     FlashLoanError::CallbackFailed => LendingError::CallbackFailed,
+    FlashLoanError::ExceedsLiquidityCap => LendingError::LimitExceeded,
+    FlashLoanError::ExcessivePriceImpact => LendingError::LimitExceeded,
+    FlashLoanError::ConcurrentLoan => LendingError::Reentrancy,
+    FlashLoanError::PriceManipulationDetected => LendingError::InvalidState,
+    FlashLoanError::Expired => LendingError::InvalidState,
+    FlashLoanError::Unprofitable => LendingError::InvalidState,
+    FlashLoanError::EmptyLegs => LendingError::InvalidAmount,
+    FlashLoanError::TooManyLegs => LendingError::LimitExceeded,
 });
 
 impl_from_error!(ReserveError, {
@@ -385,6 +393,8 @@ impl From<CrossAssetError> for LendingError {
             CrossAssetError::InvalidPrice => LendingError::PriceUnavailable,
             CrossAssetError::PriceStale => LendingError::PriceUnavailable,
             CrossAssetError::NotAuthorized => LendingError::Unauthorized,
+            CrossAssetError::InvalidCorrelation => LendingError::InvalidParameter,
+            CrossAssetError::VolatilityUnavailable => LendingError::InvalidParameter,
         }
     }
 }

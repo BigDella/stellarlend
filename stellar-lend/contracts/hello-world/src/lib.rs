@@ -14,6 +14,7 @@ pub mod errors;
 pub mod events;
 pub mod flash_loan;
 pub mod governance;
+pub mod health;
 pub mod intents;
 pub mod interest_rate;
 pub mod liquidate;
@@ -185,6 +186,21 @@ impl HelloContract {
         proposal_id: u64,
     ) -> Option<types::ProposalSimulationResult> {
         governance::get_simulation_cache(&env, proposal_id)
+    }
+
+    /// Dry-run proposal execution with state diff, impact metrics, and gas estimate.
+    pub fn gov_simulate_proposal_dry_run(
+        env: Env,
+        proposal_id: u64,
+    ) -> Result<types::ProposalDryRunResult, LendingError> {
+        governance::simulate_proposal_dry_run(&env, proposal_id).map_err(Into::into)
+    }
+
+    pub fn gov_get_dry_run_cache(
+        env: Env,
+        proposal_id: u64,
+    ) -> Option<types::ProposalDryRunResult> {
+        governance::get_dry_run_cache(&env, proposal_id)
     }
 
     pub fn gov_get_parameter_optimization(
@@ -602,6 +618,47 @@ impl HelloContract {
         callback: Address,
     ) -> Result<i128, LendingError> {
         flash_loan::execute_flash_loan(&env, user, asset, amount, callback).map_err(Into::into)
+    }
+
+    /// Pre-execution profit simulation for a flash-loan-funded liquidation.
+    pub fn simulate_flash_loan_liquidation(
+        env: Env,
+        debt_asset: Option<Address>,
+        collateral_asset: Option<Address>,
+        debt_amount: i128,
+    ) -> Result<flash_loan::FlashLoanLiquidationSim, LendingError> {
+        flash_loan::simulate_flash_loan_liquidation(&env, debt_asset, collateral_asset, debt_amount)
+            .map_err(Into::into)
+    }
+
+    /// Atomic flash loan + liquidation combo. Reverts when unprofitable.
+    pub fn execute_flash_loan_liquidation(
+        env: Env,
+        liquidator: Address,
+        borrower: Address,
+        debt_asset: Option<Address>,
+        collateral_asset: Option<Address>,
+        debt_amount: i128,
+    ) -> Result<flash_loan::FlashLoanLiquidationResult, LendingError> {
+        flash_loan::execute_flash_loan_liquidation(
+            &env,
+            liquidator,
+            borrower,
+            debt_asset,
+            collateral_asset,
+            debt_amount,
+        )
+        .map_err(Into::into)
+    }
+
+    /// Multi-asset flash loan with a single callback and atomic repayment.
+    pub fn execute_multi_asset_flash_loan(
+        env: Env,
+        user: Address,
+        legs: Vec<flash_loan::FlashLoanLeg>,
+        callback: Address,
+    ) -> Result<i128, LendingError> {
+        flash_loan::execute_multi_asset_flash_loan(&env, user, legs, callback).map_err(Into::into)
     }
 
     pub fn repay_flash_loan(
@@ -1410,6 +1467,62 @@ impl HelloContract {
         cross_asset::freeze_pool(&env, caller, asset, freeze).map_err(Into::into)
     }
 
+    pub fn set_asset_correlation(
+        env: Env,
+        asset_a: Option<Address>,
+        asset_b: Option<Address>,
+        correlation_bps: i128,
+    ) -> Result<(), LendingError> {
+        cross_asset::set_asset_correlation(&env, asset_a, asset_b, correlation_bps).map_err(Into::into)
+    }
+
+    pub fn get_asset_correlation(
+        env: Env,
+        asset_a: Option<Address>,
+        asset_b: Option<Address>,
+    ) -> i128 {
+        cross_asset::get_asset_correlation(&env, asset_a, asset_b)
+    }
+
+    pub fn set_asset_volatility(
+        env: Env,
+        asset: Option<Address>,
+        volatility_bps: i128,
+    ) -> Result<(), LendingError> {
+        cross_asset::set_asset_volatility(&env, asset, volatility_bps).map_err(Into::into)
+    }
+
+    pub fn get_dynamic_collateral_factor(
+        env: Env,
+        asset: Option<Address>,
+    ) -> Result<i128, LendingError> {
+        cross_asset::get_dynamic_collateral_factor(&env, asset).map_err(Into::into)
+    }
+
+    pub fn get_pair_liquidation_threshold(
+        env: Env,
+        debt_asset: Option<Address>,
+        collateral_asset: Option<Address>,
+    ) -> Result<i128, LendingError> {
+        cross_asset::get_pair_liquidation_threshold(&env, debt_asset, collateral_asset)
+            .map_err(Into::into)
+    }
+
+    pub fn get_unified_health_factor(
+        env: Env,
+        user: Address,
+    ) -> Result<cross_asset::UserPositionSummary, LendingError> {
+        cross_asset::get_unified_health_factor(&env, &user).map_err(Into::into)
+    }
+
+    pub fn detect_cross_asset_arbitrage(env: Env) -> Vec<cross_asset::ArbitrageOpportunity> {
+        cross_asset::detect_cross_asset_arbitrage(&env)
+    }
+
+    pub fn get_portfolio_risk_score(env: Env, user: Address) -> Result<i128, LendingError> {
+        analytics::portfolio_risk_score(&env, &user).map_err(Into::into)
+    }
+
     // -------------------------------------------------------------------------
     // AMM-Lending Integration: LP Wrapping & Auto-Allocation
     // -------------------------------------------------------------------------
@@ -1654,3 +1767,5 @@ mod differential_test;
 #[cfg(test)]
 #[path = "tests/migration_verification_test.rs"]
 mod migration_verification_test;
+#[cfg(test)]
+mod cross_asset_risk_test;

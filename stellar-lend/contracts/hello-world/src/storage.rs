@@ -62,6 +62,7 @@ pub enum GovernanceDataKey {
     GovernanceAnalytics,
     // Caches
     ProposalSimulationCache(u64),
+    ProposalDryRunCache(u64),
     ParameterOptimizationCache,
     // Rate limiting
     ProposalWindowStart(Address),

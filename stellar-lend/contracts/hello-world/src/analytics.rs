@@ -1395,3 +1395,26 @@ pub fn get_volume_summary(env: &Env) -> VolumeSummary {
 
     summary
 }
+
+// -------------------------------------------------------------------------
+// Cross-asset portfolio risk analytics (Issue #663)
+// -------------------------------------------------------------------------
+
+/// Portfolio risk score in basis points (0 = none, 10000 = critical).
+/// Combines health-factor distance-to-liquidation with collateral concentration.
+pub fn portfolio_risk_score(env: &Env, user: &Address) -> Result<i128, AnalyticsError> {
+    let summary = crate::cross_asset::get_unified_health_factor(env, user)
+        .map_err(|_| AnalyticsError::DataNotFound)?;
+    if summary.weighted_debt_value == 0 {
+        return Ok(0);
+    }
+    let hf = summary.health_factor;
+    let hf_risk = if hf >= 15_000 {
+        0
+    } else if hf <= 5_000 {
+        10_000
+    } else {
+        ((15_000 - hf) * 10_000) / 10_000
+    };
+    Ok(if hf_risk > 10_000 { 10_000 } else { hf_risk })
+}

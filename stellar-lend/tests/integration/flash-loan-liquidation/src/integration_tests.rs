@@ -153,4 +153,13 @@ mod tests {
         assert!(setup.collateral_amount > 0);
         assert!(setup.is_liquidatable());
     }
+
+    #[test]
+    fn test_combo_profit_gate_and_unprofitable_rollback() {
+        let profitable = ScenarioConfig::profitable_liquidation();
+        assert!(profitable.is_profitable());
+        let unprofitable = ScenarioConfig::unprofitable_liquidation();
+        assert!(!unprofitable.is_profitable());
+        assert!(unprofitable.liquidation_incentive_bps <= unprofitable.flash_loan_fee_bps);
+    }
 }

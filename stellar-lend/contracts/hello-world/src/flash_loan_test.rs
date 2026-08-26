@@ -213,3 +213,69 @@ fn test_flash_loan_sequence_expiry_rejects_late_callback() {
 
     assert!(result.is_err());
 }
+
+#[test]
+fn test_simulate_flash_loan_liquidation_profitable_at_default_fee() {
+    let (env, contract_id, _admin, _user, token_address) = setup_with_balance(10_000_000);
+
+    let sim = env
+        .as_contract(&contract_id, || {
+            crate::flash_loan::simulate_flash_loan_liquidation(
+                &env,
+                Some(token_address.clone()),
+                Some(token_address.clone()),
+                1_000_000,
+            )
+        })
+        .unwrap();
+
+    assert!(sim.profitable);
+    assert!(sim.estimated_profit > 0);
+    assert_eq!(sim.debt_amount, 1_000_000);
+    assert!(sim.flash_fee > 0);
+    assert!(sim.gas_units_estimate > 0);
+}
+
+#[test]
+fn test_simulate_flash_loan_liquidation_unprofitable_when_fee_exceeds_incentive() {
+    let (env, contract_id, admin, _user, token_address) = setup_with_balance(10_000_000);
+
+    env.as_contract(&contract_id, || {
+        crate::flash_loan::set_flash_loan_config(
+            &env,
+            admin,
+            crate::flash_loan::FlashLoanConfig {
+                fee_bps: 5_000,
+                max_amount: 1_000_000_000_000,
+                min_amount: 100,
+            },
+        )
+        .unwrap();
+    });
+
+    let sim = env
+        .as_contract(&contract_id, || {
+            crate::flash_loan::simulate_flash_loan_liquidation(
+                &env,
+                Some(token_address.clone()),
+                Some(token_address.clone()),
+                1_000_000,
+            )
+        })
+        .unwrap();
+
+    assert!(!sim.profitable);
+    assert!(sim.flash_fee >= sim.incentive_amount);
+}
+
+#[test]
+fn test_multi_asset_flash_loan_rejects_empty_legs() {
+    let (env, contract_id, _admin, user, _token_address) = setup_with_balance(10_000_000);
+    let callback = Address::generate(&env);
+    let legs = soroban_sdk::Vec::new(&env);
+
+    let result = env.as_contract(&contract_id, || {
+        crate::flash_loan::execute_multi_asset_flash_loan(&env, user, legs, callback)
+    });
+    assert_eq!(result, Err(crate::flash_loan::FlashLoanError::EmptyLegs));
+}
