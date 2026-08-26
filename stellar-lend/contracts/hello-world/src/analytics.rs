@@ -63,6 +63,9 @@ pub enum AnalyticsDataKey {
     /// Cumulative count of all protocol transactions
     /// Value type: u64
     TotalTransactions,
+    /// Cached composite protocol health score
+    /// Value type: ProtocolHealthScore
+    ProtocolHealthScore,
 }
 
 /// Snapshot of protocol-wide metrics.
@@ -308,6 +311,111 @@ pub fn get_protocol_stats(env: &Env) -> Result<ProtocolMetrics, AnalyticsError> 
     } else {
         update_protocol_metrics(env)
     }
+}
+
+/// Composite protocol health score, built from `ProtocolMetrics` fields
+/// that are already tracked on-chain (issue #813).
+///
+/// This is deliberately scoped to the two risk signals currently available
+/// in `ProtocolMetrics` — utilization and average borrow rate — rather than
+/// inventing on-chain data the protocol doesn't track yet (bad debt,
+/// oracle health, and governance participation are computed off-chain in
+/// `api/src/services/protocol-health/healthScore.service.ts`, which covers
+/// those with richer, non-on-chain data sources). `component_weights_bps`
+/// always sums to `BPS_DIVISOR` so the two component sub-scores can be
+/// reweighted later without changing the struct shape.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProtocolHealthScore {
+    /// Overall composite score, 0-100.
+    pub overall_score: i128,
+    /// Capital-efficiency sub-score (0-100), from utilization vs. the optimal band.
+    pub capital_efficiency_score: i128,
+    /// Rate-stability sub-score (0-100), from average borrow rate vs. a healthy ceiling.
+    pub rate_stability_score: i128,
+    /// (capital_efficiency_weight_bps, rate_stability_weight_bps) — sums to `BPS_DIVISOR`.
+    pub component_weights_bps: (i128, i128),
+    pub last_update: u64,
+}
+
+const BPS_DIVISOR: i128 = 10_000;
+/// Utilization band considered efficient, in basis points — below it capital
+/// sits idle, above it the protocol has little withdrawal buffer.
+const OPTIMAL_UTILIZATION_MIN_BPS: i128 = 7_000;
+const OPTIMAL_UTILIZATION_MAX_BPS: i128 = 9_000;
+/// Average borrow rate at/below which rates are considered fully healthy.
+const HEALTHY_BORROW_RATE_BPS: i128 = 2_000;
+/// Average borrow rate at/above which the rate-stability score bottoms out at 0.
+const STRESSED_BORROW_RATE_BPS: i128 = 5_000;
+const CAPITAL_EFFICIENCY_WEIGHT_BPS: i128 = 6_000;
+const RATE_STABILITY_WEIGHT_BPS: i128 = 4_000;
+
+/// Scores utilization against the optimal band: 100 inside the band, falling
+/// off linearly to 0 at either 0% utilization or 100%+ utilization.
+fn score_capital_efficiency(utilization_rate_bps: i128) -> i128 {
+    let utilization = utilization_rate_bps.clamp(0, BPS_DIVISOR);
+    if utilization >= OPTIMAL_UTILIZATION_MIN_BPS && utilization <= OPTIMAL_UTILIZATION_MAX_BPS {
+        return 100;
+    }
+    if utilization < OPTIMAL_UTILIZATION_MIN_BPS {
+        return (utilization * 100) / OPTIMAL_UTILIZATION_MIN_BPS.max(1);
+    }
+    let headroom = BPS_DIVISOR - OPTIMAL_UTILIZATION_MAX_BPS;
+    let over = utilization - OPTIMAL_UTILIZATION_MAX_BPS;
+    (100 - (over * 100) / headroom.max(1)).max(0)
+}
+
+/// Scores the average borrow rate: 100 at/below the healthy ceiling, 0
+/// at/above the stressed threshold, linear in between.
+fn score_rate_stability(average_borrow_rate_bps: i128) -> i128 {
+    let rate = average_borrow_rate_bps.max(0);
+    if rate <= HEALTHY_BORROW_RATE_BPS {
+        return 100;
+    }
+    if rate >= STRESSED_BORROW_RATE_BPS {
+        return 0;
+    }
+    let span = STRESSED_BORROW_RATE_BPS - HEALTHY_BORROW_RATE_BPS;
+    100 - ((rate - HEALTHY_BORROW_RATE_BPS) * 100) / span
+}
+
+/// Computes and caches the composite protocol health score from the given
+/// (already up-to-date) `ProtocolMetrics`.
+pub fn calculate_protocol_health_score(env: &Env, metrics: &ProtocolMetrics) -> ProtocolHealthScore {
+    let capital_efficiency_score = score_capital_efficiency(metrics.utilization_rate);
+    let rate_stability_score = score_rate_stability(metrics.average_borrow_rate);
+
+    let overall_score = (capital_efficiency_score * CAPITAL_EFFICIENCY_WEIGHT_BPS
+        + rate_stability_score * RATE_STABILITY_WEIGHT_BPS)
+        / BPS_DIVISOR;
+
+    let score = ProtocolHealthScore {
+        overall_score,
+        capital_efficiency_score,
+        rate_stability_score,
+        component_weights_bps: (CAPITAL_EFFICIENCY_WEIGHT_BPS, RATE_STABILITY_WEIGHT_BPS),
+        last_update: env.ledger().timestamp(),
+    };
+
+    env.storage()
+        .persistent()
+        .set(&AnalyticsDataKey::ProtocolHealthScore, &score);
+
+    score
+}
+
+/// Gets the cached composite protocol health score, recomputing from fresh
+/// protocol metrics if none exists yet.
+pub fn get_protocol_health_score(env: &Env) -> Result<ProtocolHealthScore, AnalyticsError> {
+    if let Some(score) = env
+        .storage()
+        .persistent()
+        .get::<AnalyticsDataKey, ProtocolHealthScore>(&AnalyticsDataKey::ProtocolHealthScore)
+    {
+        return Ok(score);
+    }
+    let metrics = get_protocol_stats(env)?;
+    Ok(calculate_protocol_health_score(env, &metrics))
 }
 
 /// Get the user's current position from storage.

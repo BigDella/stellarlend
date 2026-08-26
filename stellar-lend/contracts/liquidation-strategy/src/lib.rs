@@ -2,6 +2,8 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Vec};
 
+pub mod hello_world_bridge;
+
 // ── Strategy types ───────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq)]

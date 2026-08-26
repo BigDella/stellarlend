@@ -4,6 +4,7 @@
 //! updated on core actions (deposit, borrow, repay, withdraw) and exposed via getters.
 //! Covers get_protocol_report, get_user_report, edge cases (first deposit, full withdraw).
 
+use crate::analytics::{AnalyticsDataKey, ProtocolMetrics};
 use crate::deposit::{DepositDataKey, ProtocolAnalytics};
 use crate::{HelloContract, HelloContractClient};
 use soroban_sdk::{testutils::Address as _, Address, Env};
@@ -157,4 +158,75 @@ fn test_analytics_average_borrow_rate_non_negative() {
     client.borrow_asset(&user, &None, &1000);
     let report = client.get_protocol_report();
     assert!(report.metrics.average_borrow_rate >= 0);
+}
+
+// =============================================================================
+// Composite protocol health score (#813)
+// =============================================================================
+
+fn seed_protocol_metrics(env: &Env, contract_id: &Address, utilization_rate: i128, average_borrow_rate: i128) {
+    env.as_contract(contract_id, || {
+        let metrics = ProtocolMetrics {
+            total_value_locked: 1_000_000,
+            total_deposits: 1_000_000,
+            total_borrows: (1_000_000 * utilization_rate) / 10_000,
+            utilization_rate,
+            average_borrow_rate,
+            total_users: 1,
+            total_transactions: 1,
+            last_update: env.ledger().timestamp(),
+        };
+        env.storage()
+            .persistent()
+            .set(&AnalyticsDataKey::ProtocolMetrics, &metrics);
+    });
+}
+
+#[test]
+fn test_health_score_is_100_in_the_optimal_band_with_healthy_rates() {
+    let env = create_test_env();
+    let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+    seed_protocol_metrics(&env, &contract_id, 8_000, 1_000);
+
+    let score = client.get_protocol_health_score();
+    assert_eq!(score.capital_efficiency_score, 100);
+    assert_eq!(score.rate_stability_score, 100);
+    assert_eq!(score.overall_score, 100);
+}
+
+#[test]
+fn test_health_score_degrades_with_low_utilization_and_stressed_rates() {
+    let env = create_test_env();
+    let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+    // Idle capital (10% utilization) and a stressed borrow rate (>=50%).
+    seed_protocol_metrics(&env, &contract_id, 1_000, 5_000);
+
+    let score = client.get_protocol_health_score();
+    assert!(score.capital_efficiency_score < 100);
+    assert_eq!(score.rate_stability_score, 0);
+    assert!(score.overall_score < score.capital_efficiency_score.max(1));
+}
+
+#[test]
+fn test_health_score_weights_sum_to_bps_divisor() {
+    let env = create_test_env();
+    let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+    seed_protocol_metrics(&env, &contract_id, 8_000, 1_000);
+
+    let score = client.get_protocol_health_score();
+    let (efficiency_weight, stability_weight) = score.component_weights_bps;
+    assert_eq!(efficiency_weight + stability_weight, 10_000);
+}
+
+#[test]
+fn test_health_score_is_cached_between_calls() {
+    let env = create_test_env();
+    let (contract_id, _admin, client) = setup_contract_with_admin(&env);
+    seed_protocol_metrics(&env, &contract_id, 8_000, 1_000);
+
+    let first = client.get_protocol_health_score();
+    // Mutate the underlying metrics without recomputing the score cache.
+    seed_protocol_metrics(&env, &contract_id, 1_000, 5_000);
+    let second = client.get_protocol_health_score();
+    assert_eq!(first.overall_score, second.overall_score);
 }

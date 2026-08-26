@@ -2,6 +2,8 @@
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec};
 
+pub mod hello_world_bridge;
+
 pub const BPS_DIVISOR: i128 = 10_000;
 pub const RISK_TIMELOCK_SECONDS: u64 = 48 * 3600;
 pub const STANDARD_TIMELOCK_SECONDS: u64 = 24 * 3600;

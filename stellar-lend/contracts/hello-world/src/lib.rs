@@ -1464,6 +1464,14 @@ impl HelloContract {
         analytics::generate_protocol_report(&env).map_err(Into::into)
     }
 
+    /// Read-only composite protocol health score (0-100), combining
+    /// capital-efficiency and rate-stability sub-scores.
+    pub fn get_protocol_health_score(
+        env: Env,
+    ) -> Result<analytics::ProtocolHealthScore, LendingError> {
+        analytics::get_protocol_health_score(&env).map_err(Into::into)
+    }
+
     /// Read-only user position query.
     pub fn get_user_position(env: Env, user: Address) -> Result<Position, LendingError> {
         analytics::get_user_position_summary(&env, &user).map_err(Into::into)
